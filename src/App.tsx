@@ -155,6 +155,7 @@ const PROFILE_CACHE_KEY = 'laya.profile-cache.v1';
 
 const DEFAULT_ACCOUNTS: Account[] = [
   { name: 'Demo Donor', email: 'customer@laya.com', password: 'customer123', role: 'customer' },
+  { name: 'Demo NGO', email: 'ngo@laya.com', password: 'ngo123', role: 'customer' },
   { name: 'Demo Volunteer', email: 'agent@laya.com', password: 'agent123', role: 'delivery-agent' },
 ];
 
@@ -1301,10 +1302,24 @@ function OverviewPanel({ session, needs, donations, deliveries, setDashboardView
 }
 
 function NgoOverview({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
+<<<<<<< HEAD
   const openNeeds = needs.filter((need) => need.status === 'open').length;
   const assignedNeeds = needs.filter((need) => need.status === 'assigned').length;
   const fulfilledNeeds = needs.filter((need) => need.status === 'fulfilled').length;
   const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
+=======
+  const myNeeds = needs.filter((need) => need.ngoId === session.email);
+  const myNeedIds = new Set(myNeeds.map(n => n.id));
+  
+  const activeRequests = myNeeds.filter((need) => need.status === 'open').length;
+  const urgentRequests = myNeeds.filter((need) => need.status === 'open' && need.urgency === 'high').length;
+  const ongoingDeliveries = deliveries.filter((delivery) => myNeedIds.has(delivery.needId) && delivery.status !== 'delivered').length;
+  const completedToday = deliveries.filter((delivery) => {
+    if (!myNeedIds.has(delivery.needId) || delivery.status !== 'delivered') return false;
+    const deliveredAt = new Date(delivery.deliveredAt || delivery.createdAt);
+    return deliveredAt.toDateString() === new Date().toDateString();
+  }).length;
+>>>>>>> 8cda4bf (Refine NGO Dashboard UI, update request filtering logic, and add explicit validation alerts)
 
   return (
     <div className="grid w-full gap-6 xl:grid-cols-2">
@@ -2009,8 +2024,13 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
     const longitude = Number(form.lng);
     const requiredBefore = Date.parse(form.requiredBefore);
 
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(requiredBefore)) {
-      setNotice('Please add a valid address, coordinates, and required time.');
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      setNotice('❌ Please select a location using the map or "Use current location".');
+      return;
+    }
+
+    if (!Number.isFinite(requiredBefore)) {
+      setNotice('❌ Please specify a Valid Till Date.');
       return;
     }
 
@@ -2028,14 +2048,21 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
       });
 
       setForm({ address: '', lat: '', lng: '', peopleCount: '', foodType: '', mealType: 'any', category: 'any', urgency: 'high', requiredBefore: '' });
+<<<<<<< HEAD
       setNotice('Need posted successfully.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to post need.');
+=======
+      setNotice('✅ Request created successfully.');
+    } catch (error) {
+      setNotice(error instanceof Error ? `❌ ${error.message}` : '❌ Unable to create request.');
+>>>>>>> 8cda4bf (Refine NGO Dashboard UI, update request filtering logic, and add explicit validation alerts)
     }
   };
 
-  const activeNeeds = needs.filter((need) => need.status !== 'fulfilled');
-  const ngoNeedIds = new Set(needs.filter((need) => need.ngoId === session.email).map((need) => need.id));
+  const myNeeds = needs.filter((need) => need.ngoId === session.email);
+  const activeNeeds = myNeeds.filter((need) => need.status !== 'fulfilled');
+  const ngoNeedIds = new Set(myNeeds.map((need) => need.id));
   const incomingDeliveries = deliveries.filter((delivery) => ngoNeedIds.has(delivery.needId) && delivery.status !== 'delivered');
 
   const markFulfilled = async (needId: string) => {
@@ -2065,6 +2092,7 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
           <SimpleInput label="Longitude" value={form.lng} onChange={(value) => setForm({ ...form, lng: value })} placeholder="77.5946" />
 
           <div className="sm:col-span-2">
+<<<<<<< HEAD
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-slate-800">Select location from map</p>
               <button
@@ -2090,6 +2118,16 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
                 }}
               />
             ) : null}
+=======
+            {notice && (
+              <div className={`mb-4 rounded-xl p-4 text-sm font-bold border ${notice.startsWith('✅') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                {notice}
+              </div>
+            )}
+            <button type="submit" className="w-full flex items-center justify-center gap-2 rounded-[24px] bg-gradient-to-r from-[#D4AF37] to-[#CD7F32] px-8 py-4 text-sm font-bold text-white shadow-[0_8px_24px_rgba(205,127,50,0.3)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(205,127,50,0.4)] transition-all">
+              <Plus size={18} /> Create Request
+            </button>
+>>>>>>> 8cda4bf (Refine NGO Dashboard UI, update request filtering logic, and add explicit validation alerts)
           </div>
 
           <label className="block sm:col-span-2">
