@@ -762,13 +762,17 @@ function LandingPage({ onStart }: LandingPageProps) {
 
 function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNotice, onSubmit, onGoogleSignIn, onBack }: AuthPageProps) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [uiRole, setUiRole] = useState<'donor' | 'ngo' | 'volunteer'>(() => {
-    if (role === 'customer') return 'donor';
-    // default delivery-agent maps to NGO for initial selection
-    return 'ngo';
-  });
+  const [authStep, setAuthStep] = useState<1 | 2>(1);
+  const [uiRole, setUiRole] = useState<'donor' | 'ngo' | 'volunteer' | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (uiRole === 'donor') setRole('customer');
+    else if (uiRole === 'ngo' || uiRole === 'volunteer') setRole('delivery-agent');
+  }, [uiRole, setRole]);
 
   const handleGoogleClick = async () => {
+    if (!uiRole) return;
     try {
       setIsGoogleLoading(true);
       setNotice(null);
@@ -780,255 +784,297 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
     }
   };
 
+  const handleFormSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!uiRole) return;
+    setIsSubmitting(true);
+    await onSubmit(event, uiRole);
+    setTimeout(() => setIsSubmitting(false), 2000);
+  };
+
+  const getCtaText = () => {
+    if (uiRole === 'donor') return 'Start donating surplus food';
+    if (uiRole === 'ngo') return 'Request food support';
+    if (uiRole === 'volunteer') return 'Start delivering food';
+    return 'Continue';
+  };
+
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Soft gradient background: light green to white */}
-      <div className="absolute inset-0 -z-10 bg-gradient-to-br from-emerald-50 via-white to-emerald-50" />
-      <div className="absolute inset-0 -z-10 opacity-40 bg-[radial-gradient(circle_at_20%_80%,_rgba(34,197,94,0.1),_transparent_40%),radial-gradient(circle_at_80%_20%,_rgba(34,197,94,0.08),_transparent_50%)]" />
+    <div className="relative min-h-screen flex items-center justify-center p-4 sm:p-8 font-sans overflow-hidden bg-gradient-to-br from-[#F3D1C2] via-[#EADFD7] to-[#7FAFE0]">
+      {/* Background animated blurred gradient waves */}
+      <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] rounded-full bg-gradient-to-br from-yellow-100/40 to-pink-200/40 blur-[100px] animate-[slowFloat_10s_ease-in-out_infinite]" />
+      <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-gradient-to-tl from-[#5D8FCB]/40 to-[#7FAFE0]/40 blur-[120px] animate-[slowFloat_12s_ease-in-out_infinite_reverse]" />
 
       <style>{`
-        @keyframes fadeInScale {
-          from {
-            opacity: 0;
-            transform: scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1);
-          }
+        @keyframes slowFloat {
+          0%, 100% { transform: translate(0, 0) scale(1); }
+          50% { transform: translate(20px, -20px) scale(1.05); }
         }
-        .animate-fade-scale {
-          animation: fadeInScale 0.5s ease-out;
+        @keyframes fadeInSlideUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        .auth-btn-hover {
-          transition: all 0.2s ease;
+        .apple-glass-card {
+          background: rgba(255, 255, 255, 0.25);
+          backdrop-filter: blur(30px);
+          -webkit-backdrop-filter: blur(30px);
+          border: 1px solid rgba(255, 255, 255, 0.4);
+          box-shadow: 0 24px 60px rgba(0, 0, 0, 0.05), inset 0 0 0 1px rgba(255,255,255,0.2);
+          border-radius: 40px;
         }
-        .auth-btn-hover:hover {
-          transform: translateY(-2px);
+        .role-card-active {
+          background: rgba(255, 255, 255, 0.7) !important;
+          border-color: rgba(255, 255, 255, 0.9) !important;
+          transform: scale(1.02);
+          box-shadow: 0 12px 30px rgba(0,0,0,0.08);
         }
-        .tab-transition {
-          transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        .input-glow:focus {
+          box-shadow: 0 0 0 4px rgba(127, 175, 224, 0.2);
+          border-color: rgba(127, 175, 224, 0.5);
+          background: rgba(255, 255, 255, 0.9);
+        }
+        .btn-loading {
+          opacity: 0.8;
+          cursor: wait;
         }
       `}</style>
 
-      <div className="flex min-h-screen items-center justify-center px-4 py-8 sm:px-6">
-        {/* Left Features (hidden on mobile) */}
-        <div className="hidden lg:block lg:w-1/4 pr-8 space-y-6">
-          <div className="text-left">
-            <h3 className="text-2xl font-bold text-slate-900 mb-8">Why Laya?</h3>
-            <div className="space-y-6">
-              <div className="flex gap-3">
-                <div className="text-2xl flex-shrink-0">🍱</div>
-                <div>
-                  <p className="font-semibold text-slate-900">Donate food easily</p>
-                  <p className="text-sm text-slate-600 mt-1">Post surplus food in seconds</p>
+      {/* Main Container Layout */}
+      <div className="relative z-10 w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-center">
+        
+        {/* Left Card: Impact & Preview */}
+        <div className="hidden lg:flex flex-col justify-between apple-glass-card p-10 h-full min-h-[600px] relative overflow-hidden">
+          {/* Abstract overlapping shape in background */}
+          <div className="absolute -top-10 -left-10 w-64 h-64 bg-gradient-to-br from-yellow-200/50 via-pink-200/50 to-cyan-200/50 blur-[40px] rounded-full mix-blend-multiply opacity-70" />
+          
+          <div className="relative z-10 space-y-10">
+            {/* Header & AI Badge */}
+            <div>
+              <div className="group inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/40 border border-white/50 backdrop-blur-md mb-6 cursor-default transition-all hover:bg-white/60 relative">
+                <span>🤖</span>
+                <span className="text-xs font-bold text-slate-700 tracking-wide uppercase">AI-powered food system</span>
+                {/* Tooltip */}
+                <div className="absolute left-0 top-full mt-2 w-56 p-3 rounded-xl bg-white/90 shadow-xl backdrop-blur-xl border border-white/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none text-xs text-slate-600 font-medium z-20">
+                  <ul className="space-y-1">
+                    <li className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-[#7FAFE0]" />Predicts surplus food</li>
+                    <li className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-[#F3D1C2]" />Optimizes delivery routes</li>
+                    <li className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-[#EADFD7]" />Reduces waste in real time</li>
+                  </ul>
                 </div>
               </div>
-              <div className="flex gap-3">
-                <div className="text-2xl flex-shrink-0">🏢</div>
-                <div>
-                  <p className="font-semibold text-slate-900">Connect with NGOs</p>
-                  <p className="text-sm text-slate-600 mt-1">Reach communities that need help</p>
+              
+              <h1 className="text-4xl font-black text-slate-800 tracking-tight leading-[1.1]">
+                Zero Hunger.<br/>
+                <span className="text-[#5D8FCB]">Maximum Impact.</span>
+              </h1>
+            </div>
+
+            {/* Impact Metrics */}
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                { icon: '🍽️', label: '12,450', sub: 'meals rescued' },
+                { icon: '🚚', label: '1,200+', sub: 'deliveries optimized' },
+                { icon: '🌍', label: '3.2 tons', sub: 'CO₂ reduced' },
+                { icon: '⏱️', label: 'Zero', sub: 'expiry waste' }
+              ].map((m, i) => (
+                <div key={i} className="bg-white/30 backdrop-blur-md border border-white/40 rounded-2xl p-4 transition-all hover:bg-white/40">
+                  <div className="text-2xl mb-2">{m.icon}</div>
+                  <div className="font-black text-xl text-slate-800">{m.label}</div>
+                  <div className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{m.sub}</div>
                 </div>
-              </div>
-              <div className="flex gap-3">
-                <div className="text-2xl flex-shrink-0">🚚</div>
-                <div>
-                  <p className="font-semibold text-slate-900">Smart delivery system</p>
-                  <p className="text-sm text-slate-600 mt-1">AI-powered route optimization</p>
-                </div>
+              ))}
+            </div>
+
+            {/* Dashboard Preview */}
+            <div className="bg-white/40 backdrop-blur-xl border border-white/50 rounded-3xl p-5 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                <BarChart3 size={16} className="text-[#5D8FCB]" /> What you'll see after joining
+              </h3>
+              <div className="space-y-2.5">
+                {[
+                  { label: 'Live food requests map', color: 'bg-emerald-400' },
+                  { label: 'Expiry countdown alerts', color: 'bg-amber-400' },
+                  { label: 'AI optimized delivery routes', color: 'bg-blue-400' },
+                  { label: 'NGO demand heatmap', color: 'bg-purple-400' }
+                ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full ${item.color}`} />
+                    <span className="text-sm font-medium text-slate-700">{item.label}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Main Card */}
-        <div className="w-full max-w-md animate-fade-scale">
-          <div className="rounded-3xl border border-emerald-100 bg-white p-8 shadow-[0_20px_60px_rgba(16,185,129,0.12)]">
-            {/* Header */}
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-100 mb-3">
-                <Package size={28} className="text-emerald-600" />
+        {/* Right Card: Auth Flow */}
+        <div className="apple-glass-card p-8 sm:p-12 w-full max-w-[500px] mx-auto relative min-h-[600px] flex flex-col justify-center">
+          
+          {/* Glossy Infinity Symbol overlay */}
+          <div className="absolute top-8 right-8 text-6xl opacity-20 pointer-events-none drop-shadow-md text-white font-serif select-none mix-blend-overlay">
+            ∞
+          </div>
+
+          <div className="relative z-10 w-full flex flex-col h-full justify-center">
+            {/* Header / Logo */}
+            <div className="text-center mb-10">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-[20px] bg-gradient-to-br from-white/80 to-white/30 border border-white/60 shadow-lg shadow-black/5 mb-4 backdrop-blur-xl">
+                <Package size={32} className="text-[#5D8FCB]" />
               </div>
-              <h1 className="text-2xl font-bold text-slate-950">Laya</h1>
-              <p className="text-sm text-slate-600 mt-1">Smart Food Redistribution</p>
-              <p className="text-xs text-slate-500 mt-2">Delivering Surplus Food Before It Expires</p>
+              <h2 className="text-2xl font-black text-slate-800 tracking-tight">Join Laya</h2>
+              <p className="text-sm font-medium text-slate-500 mt-1">
+                {authStep === 1 ? 'Choose how you want to make an impact.' : `Creating your ${uiRole} profile`}
+              </p>
             </div>
 
-            {/* Divider */}
-            <div className="h-px bg-emerald-100 mb-6" />
-
-            {/* Mode Tabs */}
-            <div className="flex gap-2 mb-6">
-              <button
-                type="button"
-                onClick={() => setMode('signin')}
-                className={`flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm tab-transition ${
-                  mode === 'signin'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('signup')}
-                className={`flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm tab-transition ${
-                  mode === 'signup'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                }`}
-              >
-                Sign Up
-              </button>
-            </div>
-
-            {/* Role Selection (updated) */}
-            <div className="mb-6 text-center">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">I am a</p>
-
-              {/* Local role options for clearer UX; map to existing internal roles */}
-              <div className="flex flex-col items-center">
-                <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 sm:w-auto">
-                  {[
-                    { key: 'donor', label: 'Donor', mapTo: 'customer', icon: '🍱', helper: 'Provide surplus food' },
-                    { key: 'ngo', label: 'NGO', mapTo: 'delivery-agent', icon: '🏢', helper: 'Receive and distribute food' },
-                    { key: 'volunteer', label: 'Volunteer', mapTo: 'delivery-agent', icon: '🚚', helper: 'Deliver food to locations' },
-                  ].map((r) => {
-                    const isActive = uiRole === (r.key as 'donor' | 'ngo' | 'volunteer');
-                    return (
-                      <button
-                        key={r.key}
-                        type="button"
-                        onClick={() => {
-                          setUiRole(r.key as 'donor' | 'ngo' | 'volunteer');
-                          setRole(r.mapTo as Role);
-                        }}
-                        className={`flex flex-col items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-semibold transition w-full ${
-                          isActive ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                      >
-                        <span className="text-lg">{r.icon}</span>
-                        <span>{r.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="mt-3 w-full max-w-md text-sm text-slate-600">
-                  {uiRole === 'donor' && <p className="text-center">Provide surplus food</p>}
-                  {uiRole === 'ngo' && <p className="text-center">Receive and distribute food</p>}
-                  {uiRole === 'volunteer' && <p className="text-center">Deliver food to locations</p>}
-                </div>
+            {/* STEP 1: Role Selection */}
+            {authStep === 1 && (
+              <div className="space-y-4 animate-[fadeInSlideUp_0.4s_ease-out]">
+                {[
+                  { id: 'donor', title: 'Donor', icon: '🍱', desc: 'Share surplus food from events, restaurants, homes' },
+                  { id: 'ngo', title: 'NGO', icon: '🏢', desc: 'Receive and distribute food to communities' },
+                  { id: 'volunteer', title: 'Volunteer', icon: '🚴', desc: 'Deliver food using optimized AI routes' }
+                ].map((r) => (
+                  <button
+                    key={r.id}
+                    onClick={() => {
+                      setUiRole(r.id as 'donor' | 'ngo' | 'volunteer');
+                      setTimeout(() => setAuthStep(2), 300); // slight delay for visual feedback
+                    }}
+                    className={`w-full text-left p-5 rounded-3xl border border-white/40 bg-white/40 backdrop-blur-md transition-all duration-300 hover:bg-white/60 hover:-translate-y-1 hover:shadow-lg hover:shadow-black/5 ${uiRole === r.id ? 'role-card-active' : ''}`}
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="text-3xl bg-white/50 p-2 rounded-2xl shadow-sm border border-white/60">{r.icon}</div>
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-800">{r.title}</h3>
+                        <p className="text-sm font-medium text-slate-600 mt-1">{r.desc}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
               </div>
-            </div>
+            )}
 
-            {/* Form */}
-            <form className="space-y-3 mb-5" onSubmit={(event) => onSubmit(event, uiRole)}>
-              {mode === 'signup' && (
-                <input
-                  type="text"
-                  required
-                  placeholder="Full name"
-                  value={form.name}
-                  onChange={(event) => setForm({ ...form, name: event.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-900 placeholder:text-slate-500 outline-none focus:border-emerald-300 focus:bg-white focus:ring-2 focus:ring-emerald-100"
-                />
-              )}
-
-              <input
-                type="email"
-                required
-                placeholder="Email address"
-                value={form.email}
-                onChange={(event) => setForm({ ...form, email: event.target.value })}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-900 placeholder:text-slate-500 outline-none focus:border-emerald-300 focus:bg-white focus:ring-2 focus:ring-emerald-100"
-              />
-
-              <input
-                type="password"
-                required
-                minLength={4}
-                placeholder="Password"
-                value={form.password}
-                onChange={(event) => setForm({ ...form, password: event.target.value })}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-900 placeholder:text-slate-500 outline-none focus:border-emerald-300 focus:bg-white focus:ring-2 focus:ring-emerald-100"
-              />
-
-              {notice && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                  {notice}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="auth-btn-hover w-full px-4 py-3 rounded-xl bg-emerald-600 text-white font-semibold text-sm shadow-md shadow-emerald-600/20 hover:bg-emerald-700 transition"
-              >
-                Continue
-              </button>
-            </form>
-
-            {/* Divider */}
-            <div className="flex items-center gap-3 mb-5">
-              <div className="h-px flex-1 bg-slate-200" />
-              <span className="text-xs font-medium text-slate-500">OR</span>
-              <div className="h-px flex-1 bg-slate-200" />
-            </div>
-
-            {/* Social Button */}
-            <button
-              type="button"
-              onClick={handleGoogleClick}
-              disabled={isGoogleLoading}
-              className="auth-btn-hover w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 font-semibold text-sm hover:bg-slate-100 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-              </svg>
-              {isGoogleLoading ? 'Signing in...' : 'Continue with Google'}
-            </button>
-
-            {/* Bottom Text */}
-            <div className="mt-6 pt-5 border-t border-slate-100 text-center space-y-2">
-              {mode === 'signin' ? (
-                <p className="text-xs text-slate-600">
-                  Don't have an account?{' '}
+            {/* STEP 2: Auth Form */}
+            {authStep === 2 && uiRole && (
+              <div className="animate-[fadeInSlideUp_0.4s_ease-out]">
+                {/* Tabs */}
+                <div className="flex p-1 bg-black/5 rounded-2xl mb-6 backdrop-blur-md border border-white/20">
                   <button
                     type="button"
                     onClick={() => setMode('signup')}
-                    className="font-semibold text-emerald-600 hover:text-emerald-700"
+                    className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${mode === 'signup' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   >
-                    Sign up
+                    Sign Up
                   </button>
-                </p>
-              ) : (
-                <p className="text-xs text-slate-600">
-                  Already have an account?{' '}
                   <button
                     type="button"
                     onClick={() => setMode('signin')}
-                    className="font-semibold text-emerald-600 hover:text-emerald-700"
+                    className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${mode === 'signin' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   >
-                    Sign in
+                    Sign In
                   </button>
-                </p>
+                </div>
+
+                <form onSubmit={handleFormSubmit} className="space-y-4 mb-6">
+                  {mode === 'signup' && (
+                    <input
+                      type="text"
+                      required
+                      placeholder="Full Name"
+                      value={form.name}
+                      onChange={(e) => setForm({ ...form, name: e.target.value })}
+                      className="input-glow w-full px-5 py-3.5 rounded-2xl border border-white/50 bg-white/40 backdrop-blur-sm text-sm text-slate-800 placeholder:text-slate-500 outline-none transition-all"
+                    />
+                  )}
+                  <input
+                    type="email"
+                    required
+                    placeholder="Email Address"
+                    value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    className="input-glow w-full px-5 py-3.5 rounded-2xl border border-white/50 bg-white/40 backdrop-blur-sm text-sm text-slate-800 placeholder:text-slate-500 outline-none transition-all"
+                  />
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    placeholder="Password"
+                    value={form.password}
+                    onChange={(e) => setForm({ ...form, password: e.target.value })}
+                    className="input-glow w-full px-5 py-3.5 rounded-2xl border border-white/50 bg-white/40 backdrop-blur-sm text-sm text-slate-800 placeholder:text-slate-500 outline-none transition-all"
+                  />
+
+                  {notice && (
+                    <div className="rounded-xl bg-red-50/80 border border-red-100 p-3 text-xs font-medium text-red-600">
+                      {notice}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className={`w-full py-4 rounded-2xl bg-gradient-to-r from-[#5D8FCB] to-[#7FAFE0] text-white font-bold text-sm shadow-[0_8px_20px_rgba(93,143,203,0.3)] transition-all hover:shadow-[0_12px_24px_rgba(93,143,203,0.4)] hover:-translate-y-0.5 ${isSubmitting ? 'btn-loading' : ''}`}
+                  >
+                    {isSubmitting ? 'Creating your impact profile...' : getCtaText()}
+                  </button>
+                </form>
+
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="h-px flex-1 bg-white/50" />
+                  <span className="text-xs font-bold text-slate-400">OR</span>
+                  <div className="h-px flex-1 bg-white/50" />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleClick}
+                  disabled={isGoogleLoading || isSubmitting}
+                  className={`w-full py-3.5 rounded-2xl border border-white/60 bg-white/50 backdrop-blur-md text-slate-700 font-bold text-sm transition-all hover:bg-white/70 hover:shadow-sm flex items-center justify-center gap-3 ${isGoogleLoading ? 'btn-loading' : ''}`}
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                  </svg>
+                  {isGoogleLoading ? 'Signing in...' : 'Continue with Google'}
+                </button>
+              </div>
+            )}
+
+            {/* Back to Home / Roles */}
+            <div className="mt-8 flex flex-col sm:flex-row justify-center gap-4 text-center">
+              {authStep === 2 && (
+                <button 
+                  onClick={() => { setAuthStep(1); setNotice(null); }}
+                  className="text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors"
+                >
+                  ← Back to roles
+                </button>
               )}
-              <p className="text-xs text-slate-500 italic">By continuing, you help reduce food waste</p>
+              <button 
+                onClick={onBack}
+                className="text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors"
+              >
+                Back to Home
+              </button>
             </div>
 
-            {/* Back Button */}
-            <button
-              type="button"
-              onClick={onBack}
-              className="auth-btn-hover w-full mt-4 px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 font-semibold text-xs hover:bg-slate-100 transition"
-            >
-              Back to home
-            </button>
+            {/* Trust Signals */}
+            <div className="mt-8 pt-6 border-t border-white/30">
+              <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
+                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                  <ShieldCheck size={14} className="text-emerald-500" /> Verified NGOs only
+                </span>
+                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                  <MapPin size={14} className="text-[#5D8FCB]" /> Secure matching
+                </span>
+                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                  <Route size={14} className="text-purple-500" /> Delivery tracking
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
