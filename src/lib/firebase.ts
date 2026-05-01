@@ -26,6 +26,7 @@ import {
   type Unsubscribe,
   type DocumentData,
 } from 'firebase/firestore';
+import { getRouteDistanceAndTime, type Coordinates as RouteCoordinates } from './routing';
 
 type UserProfile = {
   uid: string;
@@ -88,7 +89,7 @@ type DeliveryRecord = {
   mealType?: 'veg' | 'non-veg' | 'any';
   category?: 'prepared-food' | 'raw-food' | 'packed-food' | 'any';
   quantity?: string;
-  status: 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered';
+  status: 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered' | 'cancelled';
   deliveredAt?: number;
   createdAt: number;
 };
@@ -158,18 +159,16 @@ function isFirestoreUnavailableError(error: unknown): boolean {
 function init() {
   if (!isConfigured()) return;
   if (getApps().length > 0) return;
-
-  const firebaseConfig = {
-    apiKey: env.VITE_FIREBASE_API_KEY,
-    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
-    projectId: env.VITE_FIREBASE_PROJECT_ID,
-    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-    appId: env.VITE_FIREBASE_APP_ID,
-    measurementId: env.VITE_FIREBASE_MEASUREMENT_ID,
-  } as Record<string, string | undefined>;
-
   try {
+    const firebaseConfig = {
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+      measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+    };
     initializeApp(firebaseConfig as Record<string, string>);
     auth = getAuth();
   } catch {
@@ -566,10 +565,9 @@ function getTimeUrgencyScoreLocal(requiredBefore: number) {
   return Math.max(0, 100 - hoursUntil * 10);
 }
 
-function canDeliverBeforeExpiry(expiryTime: number, distanceKm: number) {
-  const estimatedMinutes = (distanceKm / 20) * 60; // ~20 km/h
+function canDeliverBeforeExpiry(expiryTime: number, durationMin: number) {
   const minutesLeft = Math.max((expiryTime - Date.now()) / (1000 * 60), 0);
-  return minutesLeft > estimatedMinutes;
+  return minutesLeft > durationMin;
 }
 
 function isNeedCompatibleLocal(need: NeedRecord, donation: DonationRecord) {
@@ -589,7 +587,7 @@ function pickBestNeedForDonation(donation: DonationRecord, needs: NeedRecord[]) 
   const valid = needs.filter((need) => {
     if (!isNeedCompatibleLocal(need, donation)) return false;
     const dist = calculateDistanceKmSimple(donorLoc, { lat: need.location.lat, lng: need.location.lng });
-    return canDeliverBeforeExpiry(donation.expiryTime, dist);
+    return canDeliverBeforeExpiry(donation.expiryTime, (dist / 20) * 60);
   });
 
   if (!valid.length) return null;
@@ -604,6 +602,72 @@ function pickBestNeedForDonation(donation: DonationRecord, needs: NeedRecord[]) 
   return scored[0].need;
 }
 
+async function scoreNeedForDonation(donation: DonationRecord, need: NeedRecord) {
+  if (!isNeedCompatibleLocal(need, donation)) return null;
+
+  const donorLoc: RouteCoordinates | null = toCoordinates(donation.location);
+  if (!donorLoc) return null;
+
+  const route = await getRouteDistanceAndTime(donorLoc, { lat: need.location.lat, lng: need.location.lng });
+  if (!route) return null;
+
+  if (!canDeliverBeforeExpiry(donation.expiryTime, route.durationMin)) return null;
+
+  const timeToExpiryMin = Math.max((donation.expiryTime - Date.now()) / (1000 * 60), 1);
+  const score = getUrgencyWeightLocal(need.urgency)
+    + (1 / Math.max(route.distanceKm, 0.001))
+    + (1 / timeToExpiryMin)
+    - (route.durationMin / 60);
+
+  return { need, score };
+}
+
+async function scoreDonationForNeed(need: NeedRecord, donation: DonationRecord) {
+  if (!isNeedCompatibleLocal(need, donation)) return null;
+
+  const donorLoc: RouteCoordinates = { lat: donation.location.lat, lng: donation.location.lng };
+  const route = await getRouteDistanceAndTime(donorLoc, { lat: need.location.lat, lng: need.location.lng });
+  if (!route) return null;
+
+  if (!canDeliverBeforeExpiry(donation.expiryTime, route.durationMin)) return null;
+
+  const timeToExpiryMin = Math.max((donation.expiryTime - Date.now()) / (1000 * 60), 1);
+  const score = getUrgencyWeightLocal(need.urgency)
+    + (1 / Math.max(route.distanceKm, 0.001))
+    + (1 / timeToExpiryMin)
+    - (route.durationMin / 60);
+
+  return { donation, score };
+}
+
+async function pickBestNeedForDonationAsync(donation: DonationRecord, needs: NeedRecord[]) {
+  if (!needs.length) return null;
+
+  const scored: Array<{ need: NeedRecord; score: number }> = [];
+  for (const need of needs) {
+    const scoredNeed = await scoreNeedForDonation(donation, need);
+    if (scoredNeed) scored.push(scoredNeed);
+  }
+
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].need;
+}
+
+async function pickBestDonationForNeedAsync(need: NeedRecord, donations: DonationRecord[]) {
+  if (!donations.length) return null;
+
+  const scored: Array<{ donation: DonationRecord; score: number }> = [];
+  for (const donation of donations) {
+    const scoredDonation = await scoreDonationForNeed(need, donation);
+    if (scoredDonation) scored.push(scoredDonation);
+  }
+
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].donation;
+}
+
 function pickBestDonationForNeed(need: NeedRecord, donations: DonationRecord[]) {
   if (!donations.length) return null;
 
@@ -611,7 +675,7 @@ function pickBestDonationForNeed(need: NeedRecord, donations: DonationRecord[]) 
     .filter((donation) => {
       if (!isNeedCompatibleLocal(need, donation)) return false;
       const dist = calculateDistanceKmSimple({ lat: donation.location.lat, lng: donation.location.lng }, { lat: need.location.lat, lng: need.location.lng });
-      if (!canDeliverBeforeExpiry(donation.expiryTime, dist)) return false;
+      if (!canDeliverBeforeExpiry(donation.expiryTime, (dist / 20) * 60)) return false;
       return donation.expiryTime > Date.now();
     })
     .map((donation) => {
@@ -673,7 +737,7 @@ async function expireRemoteDonation(donation: DonationRecord) {
   });
 }
 
-function expireLocalDonation(donation: DonationRecord, donations: DonationRecord[], needs: NeedRecord[], deliveries: DeliveryRecord[]) {
+function expireLocalDonation(donation: DonationRecord, needs: NeedRecord[], deliveries: DeliveryRecord[]) {
   donation.status = 'expired';
   const delivery = deliveries.find((item) => item.donationId === donation.id && item.status !== 'delivered' && item.status !== 'cancelled');
   if (delivery && delivery.status !== 'in_transit') {
@@ -689,7 +753,6 @@ function expireLocalDonation(donation: DonationRecord, donations: DonationRecord
 }
 
 function runLocalMatchingPass() {
-  const now = Date.now();
   const donations = readLocalDonations();
   const needs = readLocalNeeds();
   const deliveries = readLocalDeliveries();
@@ -700,7 +763,7 @@ function runLocalMatchingPass() {
       const inTransitDelivery = deliveries.find((item) => item.donationId === donation.id && item.status === 'in_transit');
       if (inTransitDelivery) continue;
 
-      expireLocalDonation(donation, donations, needs, deliveries);
+      expireLocalDonation(donation, needs, deliveries);
       changed = true;
       continue;
     }
@@ -770,7 +833,7 @@ export async function findBestNeedForDonation(donation: DonationRecord) {
     const firestore = getFirestoreDbOrThrow();
     const needsSnap = await getDocs(query(collection(firestore, 'needs'), where('status', '==', 'open')));
     const needs: NeedRecord[] = needsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<NeedRecord, 'id'>) }));
-    return pickBestNeedForDonation(donation, needs);
+    return await pickBestNeedForDonationAsync(donation, needs);
   } catch (error) {
     if (isFirestoreMissingError(error)) {
       switchToLocalStore();
@@ -789,7 +852,7 @@ export async function findBestDonationForNeed(need: NeedRecord) {
     const firestore = getFirestoreDbOrThrow();
     const donationsSnap = await getDocs(query(collection(firestore, 'donations'), where('status', '==', 'pending')));
     const donations: DonationRecord[] = donationsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<DonationRecord, 'id'>) }));
-    return pickBestDonationForNeed(need, donations);
+    return await pickBestDonationForNeedAsync(need, donations);
   } catch (error) {
     if (isFirestoreMissingError(error)) {
       switchToLocalStore();
@@ -830,8 +893,6 @@ async function assignMatchTransaction(donationId: string, needId: string) {
         tx.update(donationRef, { status: 'expired' } as DocumentData);
         throw new Error('Donation expired');
       }
-
-      const otp = String(Math.floor(1000 + Math.random() * 9000));
 
       tx.update(donationRef, { status: 'assigned', assignedNeedId: needId } as DocumentData);
       tx.update(needRef, { status: 'assigned' } as DocumentData);

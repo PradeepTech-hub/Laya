@@ -24,7 +24,8 @@ import {
   Zap,
   Box,
 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import QRCode from 'react-qr-code';
+import { MapContainer, TileLayer, CircleMarker, Polyline, Popup } from 'react-leaflet';
 import {
   isFirebaseConfigured,
   signUpWithEmail,
@@ -50,6 +51,8 @@ import {
   type DonationRecord as FirestoreDonationRecord,
   type DeliveryRecord as FirestoreDeliveryRecord,
 } from './lib/firebase';
+import { getRouteDistanceAndTime, type RouteResult } from './lib/routing';
+import { getDecayCategory, calculateDecayProbability, calculateDecayAwareCost, getRoutingDecision } from './lib/engine';
 
 type Role = 'customer' | 'delivery-agent';
 type AuthMode = 'signin' | 'signup';
@@ -77,7 +80,7 @@ type UiRole = 'donor' | 'ngo' | 'volunteer';
 type NeedUrgency = 'high' | 'medium' | 'low';
 type MealType = 'veg' | 'non-veg' | 'any';
 type FoodCategory = 'prepared-food' | 'raw-food' | 'packed-food' | 'any';
-type DeliveryStatus = 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered';
+type DeliveryStatus = 'pending' | 'assigned' | 'accepted' | 'picked' | 'in_transit' | 'delivered' | 'cancelled';
 type Coordinates = { lat: number; lng: number };
 
 type NeedRecord = FirestoreNeedRecord;
@@ -398,14 +401,6 @@ function sortNeedsForDonation(openNeeds: NeedRecord[], donorLocation: Coordinate
 function getTimeUrgencyScore(requiredBefore: number) {
   const hoursUntilNeed = Math.max((requiredBefore - Date.now()) / (1000 * 60 * 60), 0);
   return Math.max(0, 100 - hoursUntilNeed * 10);
-}
-
-function getDistanceScore(distanceKm: number) {
-  if (!Number.isFinite(distanceKm)) {
-    return 0;
-  }
-
-  return Math.max(0, 100 - distanceKm * 5);
 }
 
 function getUrgencyWeight(urgency: NeedUrgency) {
@@ -3212,60 +3207,107 @@ function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
 }
 
 function BikeTracker({ delivery }: { delivery: DeliveryRecord }) {
-  const steps: DeliveryStatus[] = DELIVERY_STATUS_STEPS;
+  const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const start = { lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng };
   const dest = { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng };
   const agentLocation = (delivery as unknown as { agentLocation?: { lat: number; lng: number } }).agentLocation;
+  const center = agentLocation || start;
 
-  const statusIndex = steps.indexOf(delivery.status as DeliveryStatus);
-  const statusProgress = statusIndex >= 0 ? statusIndex / Math.max(1, steps.length - 1) : 0;
-  const current = delivery.status === 'delivered'
-    ? dest
-    : agentLocation
-      ? { lat: agentLocation.lat, lng: agentLocation.lng }
-      : start;
+  useEffect(() => {
+    let mounted = true;
+    async function loadRoute() {
+      const route = await getRouteDistanceAndTime(start, dest);
+      if (mounted) {
+        setRouteResult(route);
+      }
+    }
+    loadRoute();
+    return () => {
+      mounted = false;
+    };
+  }, [delivery.pickupLocation.lat, delivery.pickupLocation.lng, delivery.dropLocation.lat, delivery.dropLocation.lng]);
 
-  const totalKm = calculateDistanceKm(start, dest) || 0.0001;
-  const coveredKm = calculateDistanceKm(start, current);
-  let progress = Math.max(0, Math.min(1, coveredKm / totalKm));
-
-  if (!agentLocation) {
-    progress = statusProgress;
-  } else {
-    progress = Math.max(progress, statusProgress);
-  }
-
-  if (delivery.status === 'delivered') {
-    progress = 1;
-  }
+  const routeDistance = routeResult?.distanceKm ?? calculateDistanceKm(start, dest);
+  const routeDuration = routeResult?.durationMin ?? (routeDistance / 20) * 60;
+  const statusLabel = delivery.status.replace('_', ' ');
 
   return (
-    <div className="w-full">
-      <div className="relative h-10">
-        <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2">
-          <div className="h-1 w-full rounded-full bg-slate-100" />
-        </div>
-
-        <div className="absolute left-0 right-0 top-0 h-10">
-          <div className="relative h-full">
-            <motion.div
-              initial={false}
-              animate={{ left: `${progress * 100}%` }}
-              transition={{ type: 'spring', stiffness: 120, damping: 18 }}
-              className="absolute top-1/2 -translate-y-1/2"
-              style={{ position: 'absolute', transform: 'translate(-50%, -50%)' }}
+    <div className="w-full space-y-4">
+      <div className="rounded-3xl border border-slate-200 overflow-hidden bg-slate-50">
+        <MapContainer
+          center={[center.lat, center.lng]}
+          zoom={13}
+          scrollWheelZoom={false}
+          style={{ height: 320, width: '100%' }}
+        >
+          <TileLayer
+            attribution="&copy; OpenStreetMap contributors"
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {routeResult?.geometry?.coordinates?.length ? (
+            <Polyline
+              pathOptions={{ color: '#2563eb', weight: 5, opacity: 0.8 }}
+              positions={routeResult.geometry.coordinates.map(([lng, lat]) => [lat, lng])}
+            />
+          ) : null}
+          <CircleMarker
+            center={[start.lat, start.lng]}
+            pathOptions={{ color: '#16a34a', fillColor: '#22c55e' }}
+            radius={8}
+          >
+            <Popup>Pickup location</Popup>
+          </CircleMarker>
+          <CircleMarker
+            center={[dest.lat, dest.lng]}
+            pathOptions={{ color: '#dc2626', fillColor: '#f87171' }}
+            radius={8}
+          >
+            <Popup>Drop location</Popup>
+          </CircleMarker>
+          {agentLocation ? (
+            <CircleMarker
+              center={[agentLocation.lat, agentLocation.lng]}
+              pathOptions={{ color: '#f59e0b', fillColor: '#fde68a' }}
+              radius={8}
             >
-              <div className="inline-flex items-center justify-center rounded-full bg-white p-2 shadow">
-                <span className="text-lg">🚲</span>
-              </div>
-            </motion.div>
-          </div>
+              <Popup>Agent location</Popup>
+            </CircleMarker>
+          ) : null}
+        </MapContainer>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-white bg-white p-4 text-sm text-slate-700 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Route distance</p>
+          <p className="mt-2 text-base font-semibold text-slate-900">{routeDistance.toFixed(1)} km</p>
+        </div>
+        <div className="rounded-2xl border border-white bg-white p-4 text-sm text-slate-700 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Estimated time</p>
+          <p className="mt-2 text-base font-semibold text-slate-900">{Math.round(routeDuration)} min</p>
+        </div>
+        <div className="rounded-2xl border border-white bg-white p-4 text-sm text-slate-700 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Status</p>
+          <p className="mt-2 text-base font-semibold text-slate-900">{statusLabel}</p>
         </div>
       </div>
-      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-        <span>Start</span>
-        <span>{delivery.status.replace('_', ' ')}</span>
-        <span>Dest</span>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => openGoogleMapsRoute(start)}
+          className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+        >
+          Navigate to Pickup
+        </button>
+        {delivery.status !== 'pending' && delivery.status !== 'delivered' ? (
+          <button
+            type="button"
+            onClick={() => openGoogleMapsRoute(dest)}
+            className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+          >
+            Navigate to Drop
+          </button>
+        ) : null}
       </div>
     </div>
   );
