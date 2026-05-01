@@ -1,15 +1,14 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import L from 'leaflet';
 import {
   ArrowRight,
   BadgeCheck,
   BarChart3,
   Building2,
   CheckCircle2,
-  ChevronRight,
   ClipboardList,
   Clock3,
   LayoutDashboard,
-  Lock,
   LogOut,
   LocateFixed,
   MapPin,
@@ -17,13 +16,12 @@ import {
   Package,
   Plus,
   Route,
-  Search,
   ShieldCheck,
   Sparkles,
   Truck,
-  User,
   UserRound,
 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import {
   isFirebaseConfigured,
   signUpWithEmail,
@@ -33,12 +31,26 @@ import {
   getUserProfile as fbGetUserProfile,
   setUserProfile as fbSetUserProfile,
   signInWithGoogle,
+  listenToNeeds,
+  listenToDonations,
+  listenToDeliveries,
+  createNeed,
+  createDonation as createDonationRecord,
+  createDelivery,
+  updateDonation,
+  updateNeed,
+  updateDelivery,
+  startMatchingEngine,
+  isInOfflineMode,
+  type NeedRecord as FirestoreNeedRecord,
+  type DonationRecord as FirestoreDonationRecord,
+  type DeliveryRecord as FirestoreDeliveryRecord,
 } from './lib/firebase';
 
 type Role = 'customer' | 'delivery-agent';
 type AuthMode = 'signin' | 'signup';
 type AppPage = 'landing' | 'auth' | 'app';
-type DashboardView = 'overview' | 'requests' | 'tracking' | 'profile';
+type DashboardView = 'overview' | 'requests' | 'needs' | 'tracking' | 'profile';
 
 type Account = {
   name: string;
@@ -48,6 +60,7 @@ type Account = {
 };
 
 type Session = {
+  uid: string;
   name: string;
   email: string;
   role: Role;
@@ -57,16 +70,44 @@ type Session = {
 
 type UiRole = 'donor' | 'ngo' | 'volunteer';
 
-type ShipmentStatus = 'queued' | 'assigned' | 'in-transit' | 'delivered';
+type NeedUrgency = 'high' | 'medium' | 'low';
+type MealType = 'veg' | 'non-veg' | 'any';
+type FoodCategory = 'prepared-food' | 'raw-food' | 'packed-food' | 'any';
+type DeliveryStatus = 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered';
+type Coordinates = { lat: number; lng: number };
 
-type Shipment = {
-  id: number;
-  title: string;
-  pickup: string;
-  dropoff: string;
-  eta: string;
-  status: ShipmentStatus;
-  agent: string;
+type NeedRecord = FirestoreNeedRecord;
+type DonationRecord = FirestoreDonationRecord;
+type DeliveryRecord = FirestoreDeliveryRecord;
+
+type DonationFormState = {
+  foodType: string;
+  mealType: MealType;
+  category: FoodCategory;
+  quantity: string;
+  pickupLocation: string;
+  pickupLat: string;
+  pickupLng: string;
+  expiryTime: 'within-1-hour' | 'within-2-hours' | 'within-4-hours' | 'today';
+  notificationEnabled: boolean;
+  notes: string;
+};
+
+type NeedFormState = {
+  address: string;
+  lat: string;
+  lng: string;
+  peopleCount: string;
+  foodType: string;
+  mealType: MealType;
+  category: FoodCategory;
+  urgency: NeedUrgency;
+  requiredBefore: string;
+};
+
+type LocationPickerMapProps = {
+  selected: Coordinates | null;
+  onSelect: (coords: Coordinates) => void;
 };
 
 type MetricCardProps = {
@@ -99,6 +140,9 @@ type AppShellProps = {
   dashboardView: DashboardView;
   setDashboardView: (view: DashboardView) => void;
   onLogout: () => void;
+  needs: NeedRecord[];
+  donations: DonationRecord[];
+  deliveries: DeliveryRecord[];
 };
 
 const ACCOUNTS_KEY = 'laya.accounts.v1';
@@ -135,12 +179,13 @@ const NAV_ITEMS: Record<Role, { key: DashboardView; label: string; icon: ReactNo
   customer: [
     { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={16} /> },
     { key: 'requests', label: 'Food Donations', icon: <ClipboardList size={16} /> },
+    { key: 'needs', label: 'Live Needs', icon: <MapPin size={16} /> },
     { key: 'tracking', label: 'Delivery Tracking', icon: <Route size={16} /> },
     { key: 'profile', label: 'Profile', icon: <UserRound size={16} /> },
   ],
   'delivery-agent': [
     { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={16} /> },
-    { key: 'requests', label: 'Assignments', icon: <ClipboardList size={16} /> },
+    { key: 'requests', label: 'My Assignments', icon: <ClipboardList size={16} /> },
     { key: 'tracking', label: 'Routes', icon: <Route size={16} /> },
     { key: 'profile', label: 'Profile', icon: <UserRound size={16} /> },
   ],
@@ -151,17 +196,37 @@ const UI_NAV_ITEMS: Record<UiRole, { key: DashboardView; label: string; icon: Re
   ngo: [
     { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={16} /> },
     { key: 'requests', label: 'Intake', icon: <ClipboardList size={16} /> },
+    { key: 'needs', label: 'Live Needs', icon: <MapPin size={16} /> },
     { key: 'tracking', label: 'Network', icon: <Route size={16} /> },
     { key: 'profile', label: 'Profile', icon: <UserRound size={16} /> },
   ],
   volunteer: NAV_ITEMS['delivery-agent'],
 };
 
-const CUSTOMER_SHIPMENTS: Shipment[] = [];
+const DELIVERY_STATUS_STEPS: Array<'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered'> = ['pending', 'accepted', 'picked', 'in_transit', 'delivered'];
 
-const AGENT_SHIPMENTS: Shipment[] = [
-  { id: 1, title: 'Priority Envelope', pickup: 'Central Branch', dropoff: 'North Tower', eta: '7 min', status: 'in-transit', agent: 'You' },
-  { id: 2, title: 'Retail Pickup', pickup: 'City Storefront', dropoff: 'Harbor Labs', eta: '14 min', status: 'assigned', agent: 'You' },
+const EMPTY_DELIVERIES: DeliveryRecord[] = [];
+const EMPTY_DONATIONS: DonationRecord[] = [];
+const EMPTY_NEEDS: NeedRecord[] = [];
+
+const MEAL_TYPE_OPTIONS: { value: MealType; label: string }[] = [
+  { value: 'veg', label: 'Veg' },
+  { value: 'non-veg', label: 'Non-Veg' },
+  { value: 'any', label: 'Any' },
+];
+
+const CATEGORY_OPTIONS: { value: FoodCategory; label: string }[] = [
+  { value: 'prepared-food', label: 'Prepared Food' },
+  { value: 'raw-food', label: 'Raw Food' },
+  { value: 'packed-food', label: 'Packed Food' },
+  { value: 'any', label: 'Any' },
+];
+
+const EXPIRY_TIME_OPTIONS: { value: 'within-1-hour' | 'within-2-hours' | 'within-4-hours' | 'today'; label: string }[] = [
+  { value: 'within-1-hour', label: 'Within 1 hour' },
+  { value: 'within-2-hours', label: 'Within 2 hours' },
+  { value: 'within-4-hours', label: 'Within 4 hours' },
+  { value: 'today', label: 'Today' },
 ];
 
 const CUSTOMER_METRICS = [
@@ -182,25 +247,7 @@ const NGO_METRICS = [
   { icon: <CheckCircle2 size={22} className="text-emerald-600" />, value: '96%', label: 'Matched donations', accent: 'bg-emerald-50' },
 ];
 
-const LANDING_FEATURES = [
-  {
-    icon: <ShieldCheck size={20} className="text-cyan-600" />,
-    title: 'Verified donation flow',
-    text: 'Keep donors and volunteers in a clear, role-based workflow from request to handoff.',
-  },
-  {
-    icon: <Search size={20} className="text-amber-600" />,
-    title: 'Live tracking',
-    text: 'See the status of every donation with clean, easy-to-scan updates and route checkpoints.',
-  },
-  {
-    icon: <Sparkles size={20} className="text-indigo-600" />,
-    title: 'Modern experience',
-    text: 'A polished donation experience with responsive layouts that work on desktop and mobile.',
-  },
-];
-
-const ROUTE_STEPS = ['Pickup Confirmed', 'In Transit', 'Delivered to NGO', 'Distributed'];
+const ROUTE_STEPS = ['Pickup Confirmed', 'In Transit', 'Delivered to Need Location', 'Completed'];
 
 function getInitialAccounts() {
   if (typeof window === 'undefined') {
@@ -282,12 +329,207 @@ function getDisplayRoleLabel(session: Session) {
   return session.displayRoleLabel || ROLE_META[session.role].label;
 }
 
-function getUiRoleLabel(session: Session) {
-  return session.displayRoleLabel || UI_ROLE_LABELS[session.uiRole];
+function getUrgencyScore(urgency: NeedUrgency) {
+  return urgency === 'high' ? 0 : urgency === 'medium' ? 1 : 2;
 }
 
-function getAuthTitle(mode: AuthMode, role: Role) {
-  return mode === 'signup' ? `Create your ${formatRole(role)} account` : `Sign in as a ${formatRole(role)}`;
+function toCoordinates(lat: string, lng: string): Coordinates | null {
+  const parsedLat = Number(lat);
+  const parsedLng = Number(lng);
+
+  if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
+    return null;
+  }
+
+  return { lat: parsedLat, lng: parsedLng };
+}
+
+function calculateDistanceKm(a: Coordinates | null, b: Coordinates | null) {
+  if (!a || !b) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const deltaLat = toRadians(b.lat - a.lat);
+  const deltaLng = toRadians(b.lng - a.lng);
+  const latitudeA = toRadians(a.lat);
+  const latitudeB = toRadians(b.lat);
+
+  const haversine =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(latitudeA) * Math.cos(latitudeB) * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function generateOtp() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function sortNeedsForDonation(openNeeds: NeedRecord[], donorLocation: Coordinates | null) {
+  return [...openNeeds].sort((left, right) => {
+    const urgencyDelta = getUrgencyScore(left.urgency) - getUrgencyScore(right.urgency);
+    if (urgencyDelta !== 0) {
+      return urgencyDelta;
+    }
+
+    const leftDistance = calculateDistanceKm(donorLocation, { lat: left.location.lat, lng: left.location.lng });
+    const rightDistance = calculateDistanceKm(donorLocation, { lat: right.location.lat, lng: right.location.lng });
+    if (leftDistance !== rightDistance) {
+      return leftDistance - rightDistance;
+    }
+
+    return left.requiredBefore - right.requiredBefore;
+  });
+}
+
+function getTimeUrgencyScore(requiredBefore: number) {
+  const hoursUntilNeed = Math.max((requiredBefore - Date.now()) / (1000 * 60 * 60), 0);
+  return Math.max(0, 100 - hoursUntilNeed * 10);
+}
+
+function getDistanceScore(distanceKm: number) {
+  if (!Number.isFinite(distanceKm)) {
+    return 0;
+  }
+
+  return Math.max(0, 100 - distanceKm * 5);
+}
+
+function getUrgencyWeight(urgency: NeedUrgency) {
+  return urgency === 'high' ? 300 : urgency === 'medium' ? 180 : 90;
+}
+
+function convertExpiryTimeToTimestamp(expiryTimeValue: string): number {
+  const now = Date.now();
+  switch (expiryTimeValue) {
+    case 'within-1-hour':
+      return now + 1 * 60 * 60 * 1000;
+    case 'within-2-hours':
+      return now + 2 * 60 * 60 * 1000;
+    case 'within-4-hours':
+      return now + 4 * 60 * 60 * 1000;
+    case 'today': {
+      const endOfToday = new Date();
+      endOfToday.setHours(23, 59, 59, 999);
+      return endOfToday.getTime();
+    }
+    default:
+      return now + 2 * 60 * 60 * 1000;
+  }
+}
+
+function isDeliveryPossibleBeforeExpiry(expiryTime: number, donorDistance: number): boolean {
+  const estimatedDeliveryMinutes = (donorDistance / 20) * 60;
+  const timeUntilExpiry = Math.max((expiryTime - Date.now()) / (1000 * 60), 0);
+  return timeUntilExpiry > estimatedDeliveryMinutes;
+}
+
+function isNeedCompatible(need: NeedRecord, mealType: MealType, category: FoodCategory) {
+  const needMealType = (need.mealType as MealType | undefined) || 'any';
+  const needCategory = (need.category as FoodCategory | undefined) || 'any';
+
+  const mealTypeMatches = mealType === 'any' || needMealType === 'any' || needMealType === mealType;
+  const categoryMatches = category === 'any' || needCategory === 'any' || needCategory === category;
+
+  return mealTypeMatches && categoryMatches;
+}
+
+function selectBestNeedByScore(openNeeds: NeedRecord[], donorLocation: Coordinates | null, mealType: MealType, category: FoodCategory, expiryTime: number) {
+  const compatibleNeeds = openNeeds.filter((need) => {
+    if (!isNeedCompatible(need, mealType, category)) {
+      return false;
+    }
+    const distanceKm = calculateDistanceKm(donorLocation, { lat: need.location.lat, lng: need.location.lng });
+    return isDeliveryPossibleBeforeExpiry(expiryTime, distanceKm);
+  });
+
+  if (compatibleNeeds.length === 0) {
+    return null;
+  }
+
+  const scoredNeeds = compatibleNeeds.map((need) => {
+    const distanceKm = calculateDistanceKm(donorLocation, { lat: need.location.lat, lng: need.location.lng });
+    const score = getUrgencyWeight(need.urgency) + getDistanceScore(distanceKm) + getTimeUrgencyScore(need.requiredBefore);
+    return { need, score };
+  });
+
+  scoredNeeds.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+
+    return left.need.requiredBefore - right.need.requiredBefore;
+  });
+
+  return scoredNeeds[0].need;
+}
+
+function LocationPickerMap({ selected, onSelect }: LocationPickerMapProps) {
+  const mapElementRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.CircleMarker | null>(null);
+  const onSelectRef = useRef(onSelect);
+
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
+
+  useEffect(() => {
+    if (!mapElementRef.current || mapRef.current) {
+      return;
+    }
+
+    const map = L.map(mapElementRef.current).setView([12.9716, 77.5946], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map);
+
+    map.on('click', (event: L.LeafletMouseEvent) => {
+      onSelectRef.current({ lat: event.latlng.lat, lng: event.latlng.lng });
+    });
+
+    mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    const center = selected || { lat: 12.9716, lng: 77.5946 };
+    map.setView([center.lat, center.lng], map.getZoom(), { animate: true });
+
+    if (markerRef.current) {
+      markerRef.current.remove();
+      markerRef.current = null;
+    }
+
+    if (selected) {
+      markerRef.current = L.circleMarker([selected.lat, selected.lng], {
+        radius: 9,
+        color: '#0369a1',
+        fillColor: '#0891b2',
+        fillOpacity: 0.8,
+      }).addTo(map);
+    }
+  }, [selected]);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+      <div ref={mapElementRef} className="h-64 w-full" />
+      <div className="border-t border-slate-200 bg-white px-4 py-2 text-xs text-slate-500">Click on the map to set the need location.</div>
+    </div>
+  );
 }
 
 function MetricCard({ icon, value, label, accent }: MetricCardProps) {
@@ -350,9 +592,9 @@ function LandingPage({ onStart }: LandingPageProps) {
         }
       `}</style>
 
-      <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16 lg:py-20">
+      <div className="w-full px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
         {/* Hero Section */}
-        <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
+        <div className="grid gap-12 xl:grid-cols-2 xl:items-center">
           {/* Left Column */}
           <div className="animate-fade-slide animate-fade-slide-delay-1">
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 mb-6">
@@ -407,7 +649,7 @@ function LandingPage({ onStart }: LandingPageProps) {
             </div>
 
             {/* Stat Cards Grid */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="animate-fade-slide animate-fade-slide-delay-3 card-hover rounded-2xl bg-white border border-emerald-100 p-4 text-center shadow-sm">
                 <p className="text-2xl font-bold text-emerald-600">12.5K</p>
                 <p className="mt-1 text-xs font-medium text-slate-600">Meals Saved</p>
@@ -433,8 +675,8 @@ function LandingPage({ onStart }: LandingPageProps) {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
-            <div className="card-hover rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+            <div className="card-hover w-full rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-100 mb-4">
                 <Building2 size={24} className="text-emerald-600" />
               </div>
@@ -442,7 +684,7 @@ function LandingPage({ onStart }: LandingPageProps) {
               <p className="text-sm text-slate-600">Restaurants, stores, and individuals list surplus food with details and expiry times.</p>
             </div>
 
-            <div className="card-hover rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
+            <div className="card-hover w-full rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-100 mb-4">
                 <BarChart3 size={24} className="text-emerald-600" />
               </div>
@@ -450,7 +692,7 @@ function LandingPage({ onStart }: LandingPageProps) {
               <p className="text-sm text-slate-600">Our AI engine matches donors with nearby NGOs and creates optimal delivery routes.</p>
             </div>
 
-            <div className="card-hover rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
+            <div className="card-hover w-full rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-100 mb-4">
                 <Truck size={24} className="text-emerald-600" />
               </div>
@@ -477,8 +719,9 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
       setIsGoogleLoading(true);
       setNotice(null);
       await onGoogleSignIn(uiRole);
-    } catch (err: any) {
-      setNotice(err?.message || 'Google sign-in failed');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Google sign-in failed');
+    } finally {
       setIsGoogleLoading(false);
     }
   };
@@ -593,7 +836,7 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
 
               {/* Local role options for clearer UX; map to existing internal roles */}
               <div className="flex flex-col items-center">
-                <div className="grid grid-cols-3 gap-3 w-full max-w-md sm:max-w-none sm:w-auto">
+                <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 sm:w-auto">
                   {[
                     { key: 'donor', label: 'Donor', mapTo: 'customer', icon: '🍱', helper: 'Provide surplus food' },
                     { key: 'ngo', label: 'NGO', mapTo: 'delivery-agent', icon: '🏢', helper: 'Receive and distribute food' },
@@ -739,54 +982,15 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
   );
 }
 
-function RolePill({ role, active, onClick }: { role: Role; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-2xl border px-4 py-3 text-left transition ${active ? 'border-cyan-200 bg-cyan-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-900">{ROLE_META[role].label}</p>
-          <p className="mt-1 text-xs leading-5 text-slate-500">{ROLE_META[role].description}</p>
-        </div>
-        <ChevronRight size={16} className={active ? 'text-cyan-600' : 'text-slate-400'} />
-      </div>
-    </button>
-  );
-}
-
-function DemoCard({ role, email, password }: { role: Role; email: string; password: string }) {
-  return (
-    <div className="rounded-2xl border border-white bg-white p-4 shadow-sm">
-      <p className="text-sm font-semibold text-slate-900">{ROLE_META[role].label} demo</p>
-      <p className="mt-2 text-xs text-slate-500">Email: {email}</p>
-      <p className="text-xs text-slate-500">Password: {password}</p>
-    </div>
-  );
-}
-
-function Field({ label, icon, children }: { label: string; icon: ReactNode; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-800">
-        {icon}
-        {label}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function AppShell({ session, dashboardView, setDashboardView, onLogout }: AppShellProps) {
+function AppShell({ session, dashboardView, setDashboardView, onLogout, needs, donations, deliveries }: AppShellProps) {
   const navItems = UI_NAV_ITEMS[session.uiRole];
   const meta = ROLE_META[session.role];
   const displayRoleLabel = getDisplayRoleLabel(session);
+  const dashboard = session.uiRole === 'volunteer' && dashboardView === 'needs' ? 'requests' : dashboardView;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-      <div className="rounded-[2rem] border border-white/80 bg-white/85 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
+    <div className="w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/85 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-950/20">
@@ -795,6 +999,7 @@ function AppShell({ session, dashboardView, setDashboardView, onLogout }: AppShe
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-600">Laya</p>
               <p className="text-lg font-bold tracking-tight text-slate-900">{displayRoleLabel}</p>
+              <p className="text-sm text-slate-500">Delivering Surplus Food Before It Expires</p>
             </div>
           </div>
 
@@ -823,7 +1028,7 @@ function AppShell({ session, dashboardView, setDashboardView, onLogout }: AppShe
               key={item.key}
               type="button"
               onClick={() => setDashboardView(item.key)}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${dashboardView === item.key ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`inline-flex shrink-0 items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${dashboard === item.key ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
             >
               {item.icon}
               {item.label}
@@ -833,18 +1038,21 @@ function AppShell({ session, dashboardView, setDashboardView, onLogout }: AppShe
       </div>
 
       <main className="mt-6">
-        {dashboardView === 'overview' && <OverviewPanel session={session} />}
-        {dashboardView === 'requests' && <RequestsPanel session={session} />}
-        {dashboardView === 'tracking' && <TrackingPanel session={session} />}
-        {dashboardView === 'profile' && <ProfilePanel session={session} onLogout={onLogout} />}
+        {dashboard === 'overview' && <OverviewPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
+        {dashboard === 'requests' && <RequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
+        {dashboard === 'needs' && session.uiRole !== 'volunteer' && <NeedsPanel session={session} needs={needs} />}
+        {dashboard === 'tracking' && <TrackingPanel session={session} donations={donations} deliveries={deliveries} />}
+        {dashboard === 'profile' && <ProfilePanel session={session} onLogout={onLogout} />}
       </main>
     </div>
   );
 }
 
-function OverviewPanel({ session }: { session: Session }) {
+function OverviewPanel({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
   const metrics = session.uiRole === 'donor' ? CUSTOMER_METRICS : session.uiRole === 'ngo' ? NGO_METRICS : AGENT_METRICS;
   const displayRoleLabel = getDisplayRoleLabel(session);
+  const openNeeds = needs.filter((need) => need.status === 'open').length;
+  const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
 
   return (
     <div className="space-y-6">
@@ -853,7 +1061,11 @@ function OverviewPanel({ session }: { session: Session }) {
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Welcome back</p>
             <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Hi {session.name.split(' ')[0]}, your donation dashboard is ready</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">Manage your food donations and track impact</p>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
+              {session.uiRole === 'ngo'
+                ? 'Post live needs, match donations, and close the loop at the beneficiary location.'
+                : 'Manage your food donations and track impact'}
+            </p>
           </div>
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm text-cyan-100">
             <Sparkles size={16} />
@@ -862,361 +1074,125 @@ function OverviewPanel({ session }: { session: Session }) {
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {metrics.map((metric) => (
           <MetricCard key={metric.label} {...metric} />
         ))}
       </div>
 
+      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
+        <MetricCard icon={<MapPin size={22} className="text-cyan-600" />} value={String(openNeeds)} label="Open Needs" accent="bg-cyan-50" />
+        <MetricCard icon={<Truck size={22} className="text-emerald-600" />} value={String(activeDeliveries)} label="Active Deliveries" accent="bg-emerald-50" />
+      </div>
+
       {/* Impact card for donors */}
       {/** show a simple impact summary card */}
       <div className="mt-4">
-        <div className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-sm">
+        <div className="w-full rounded-2xl border border-white/80 bg-white/90 p-4 shadow-sm">
           <p className="text-lg font-semibold text-slate-900">🌍 You helped feed 120 people this week</p>
         </div>
       </div>
 
-      {session.uiRole === 'donor' ? <CustomerOverview /> : session.uiRole === 'ngo' ? <NgoOverview /> : <AgentOverview />}
+      {session.uiRole === 'donor' ? <CustomerOverview session={session} needs={needs} donations={donations} deliveries={deliveries} /> : session.uiRole === 'ngo' ? <NgoOverview session={session} needs={needs} deliveries={deliveries} /> : <AgentOverview session={session} deliveries={deliveries} />}
     </div>
   );
 }
 
-function NgoOverview() {
-  const [shipments] = useState<Shipment[]>([
-    { id: 1, title: 'Bakery surplus intake', pickup: 'Sunrise Bakery', dropoff: 'City Relief Hub', eta: '15 min', status: 'queued', agent: 'Pending approval' },
-    { id: 2, title: 'Catering donation batch', pickup: 'Grand Hall', dropoff: 'North Community Kitchen', eta: '22 min', status: 'assigned', agent: 'Volunteer ready' },
-    { id: 3, title: 'Community pantry dispatch', pickup: 'West Pantry', dropoff: 'Shelter Network', eta: 'In transit', status: 'in-transit', agent: 'On the way' },
-  ]);
+function NgoOverview({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
+  const openNeeds = needs.filter((need) => need.status === 'open').length;
+  const assignedNeeds = needs.filter((need) => need.status === 'assigned').length;
+  const fulfilledNeeds = needs.filter((need) => need.status === 'fulfilled').length;
+  const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Intake" title="Review surplus and distribute it faster" text="NGOs can triage incoming donations, confirm recipients, and keep food moving before it expires." />
+    <div className="grid w-full gap-6 xl:grid-cols-2">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Live Need Ops" title="Match donations to beneficiary demand" text="NGOs can post needs, watch open requests, and keep deliveries focused on the beneficiary location." />
 
-        <div className="mt-6 space-y-3">
-          {shipments.map((shipment) => (
-            <ShipmentCard key={shipment.id} shipment={shipment} />
-          ))}
+        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-2">
+          <MetricCard icon={<MapPin size={22} className="text-cyan-600" />} value={String(openNeeds)} label="Open Needs" accent="bg-cyan-50" />
+          <MetricCard icon={<Truck size={22} className="text-emerald-600" />} value={String(activeDeliveries)} label="Active Deliveries" accent="bg-emerald-50" />
+          <MetricCard icon={<ClipboardList size={22} className="text-amber-600" />} value={String(assignedNeeds)} label="Assigned Needs" accent="bg-amber-50" />
+          <MetricCard icon={<CheckCircle2 size={22} className="text-emerald-600" />} value={String(fulfilledNeeds)} label="Fulfilled" accent="bg-emerald-50" />
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          <p className="font-semibold text-slate-900">{session.name}</p>
+          <p className="mt-1">Post a new need from the Requests tab, then track all open beneficiary requests from Live Needs.</p>
         </div>
       </div>
 
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Network" title="Partner and beneficiary status" text="Keep the redistribution network visible across shelters, kitchens, and volunteers." />
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Network" title="Need-first coordination" text="Open needs stay visible to donors and volunteers until every beneficiary request is fulfilled." />
 
         <div className="mt-6 space-y-4">
-          <ActionCard icon={<Building2 size={18} />} title="Partner hubs" text="Track which local hubs are ready to receive each batch." />
-          <ActionCard icon={<ClipboardList size={18} />} title="Intake approvals" text="Approve donations and route them to the right recipients." />
-          <ActionCard icon={<Route size={18} />} title="Donation handoff" text="Hand off confirmed donations to a volunteer or delivery partner." />
-          <ActionCard icon={<CheckCircle2 size={18} />} title="Waste reduction" text="Monitor items rescued before expiry and closed out successfully." />
-          <div className="mt-4">
-            <h4 className="text-sm font-semibold text-slate-900">Partner NGOs</h4>
-            <div className="mt-3 space-y-3">
-              <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center gap-3">
-                  <Building2 className="text-emerald-600" />
-                  <div>
-                    <p className="text-sm font-semibold">Hope Shelter</p>
-                    <p className="text-xs text-slate-500">2 km</p>
-                  </div>
-                </div>
-                <p className="text-sm font-semibold text-emerald-700">Available</p>
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center gap-3">
-                  <Building2 className="text-emerald-600" />
-                  <div>
-                    <p className="text-sm font-semibold">Community Kitchen</p>
-                    <p className="text-xs text-slate-500">4.1 km</p>
-                  </div>
-                </div>
-                <p className="text-sm font-semibold text-amber-600">Receiving</p>
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center gap-3">
-                  <Building2 className="text-emerald-600" />
-                  <div>
-                    <p className="text-sm font-semibold">Neighborhood Pantry</p>
-                    <p className="text-xs text-slate-500">6.3 km</p>
-                  </div>
-                </div>
-                <p className="text-sm font-semibold text-slate-500">Idle</p>
-              </div>
-            </div>
-          </div>
+          <ActionCard icon={<Building2 size={18} />} title="Post needs" text="Create real-time beneficiary needs with location, people count, food type, and urgency." />
+          <ActionCard icon={<Route size={18} />} title="Direct delivery" text="Deliver food straight to the need location instead of storing it at NGO offices." />
+          <ActionCard icon={<CheckCircle2 size={18} />} title="Fulfillment" text="Mark a need fulfilled once the delivery is completed and verified." />
+          <ActionCard icon={<ShieldCheck size={18} />} title="OTP safety" text="Require a 4-digit OTP before final delivery confirmation." />
         </div>
       </div>
     </div>
   );
 }
 
-function CustomerOverview() {
-  const [shipments, setShipments] = useState<Shipment[]>(CUSTOMER_SHIPMENTS);
-  const [form, setForm] = useState({ title: '', pickup: '', dropoff: '', eta: '', unit: 'KG', mealType: 'Veg', category: 'Raw Food' });
-  const [pickupMode, setPickupMode] = useState<'manual' | 'auto'>('manual');
-  const [locationNotice, setLocationNotice] = useState<string | null>(null);
-  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
-  const mealTypes = [
-    { key: 'Veg', label: 'Veg' },
-    { key: 'Non-veg', label: 'Non-veg' },
-  ] as const;
-  const categories = [
-    { key: 'Raw Food', label: 'Raw Food', icon: '🥕' },
-    { key: 'Cooked Food', label: 'Cooked Food', icon: '🍛' },
-    { key: 'Packed Food', label: 'Packed Food', icon: '📦' },
-  ] as const;
-
-  const detectPickupLocation = () => {
-    if (!navigator.geolocation) {
-      setLocationNotice('Location detection is not supported in this browser.');
-      return;
-    }
-
-    setIsDetectingLocation(true);
-    setLocationNotice('Detecting your location...');
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        const detectedLocation = `Current location (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`;
-
-        setPickupMode('auto');
-        setForm((current) => ({ ...current, pickup: detectedLocation }));
-        setLocationNotice('Location detected successfully.');
-        setIsDetectingLocation(false);
-      },
-      () => {
-        setLocationNotice('Unable to detect your location. Please enter it manually.');
-        setIsDetectingLocation(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  };
-
-  const createRequest = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    setShipments((current) => [
-      {
-        id: Date.now(),
-        title: `${form.category} - ${form.title}`,
-        pickup: form.pickup,
-        dropoff: `${form.dropoff} ${form.unit}`,
-        eta: form.eta,
-        status: 'queued',
-        agent: 'Pending assignment',
-      },
-      ...current,
-    ]);
-
-    setForm({ title: '', pickup: '', dropoff: '', eta: '', unit: 'KG', mealType: 'Veg', category: 'Raw Food' });
-    setPickupMode('manual');
-    setLocationNotice(null);
-  };
+function CustomerOverview({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
+  const donorDeliveries = deliveries.filter((delivery) => delivery.donorId === session.email);
+  const donorDonations = donations.filter((donation) => donation.donorId === session.email);
+  const bestNeeds = sortNeedsForDonation(needs.filter((need) => need.status === 'open'), null).slice(0, 3);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Donate Food" title="Donate Food" text="Quickly post surplus food for pickup and redistribution." />
+    <div className="grid w-full gap-6 xl:grid-cols-2">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Donation Flow" title="Match surplus food to the closest open need" text="Donors submit food details, and the app selects the best beneficiary need by urgency, distance, and time." />
 
-        <form onSubmit={createRequest} className="mt-6 grid gap-4 sm:grid-cols-2">
-          <SimpleInput label="Food Type" value={form.title} onChange={(value) => setForm({ ...form, title: value })} placeholder="Cooked meals, Bread, Produce" />
-          <div className="block">
-            <span className="mb-2 block text-sm font-semibold text-slate-800">Meal Type</span>
-            <div className="grid grid-cols-2 gap-3">
-              {mealTypes.map((item) => {
-                const active = form.mealType === item.key;
-
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => setForm({ ...form, mealType: item.key })}
-                    className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${active ? 'border-slate-950 bg-slate-950 text-white shadow-sm' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white'}`}
-                  >
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="sm:col-span-2">
-            <span className="mb-2 block text-sm font-semibold text-slate-800">Select the Category</span>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {categories.map((item) => {
-                const active = form.category === item.key;
-
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => setForm({ ...form, category: item.key })}
-                    className={`group relative overflow-hidden rounded-2xl border p-0 text-left shadow-sm transition ${active ? 'border-slate-950 ring-2 ring-slate-950/70' : 'border-slate-200 hover:border-slate-300'}`}
-                  >
-                    <div className="relative flex h-24 items-end bg-slate-900">
-                      <div className={`absolute inset-0 bg-gradient-to-r ${item.key === 'Raw Food' ? 'from-emerald-950/90 via-emerald-700/70 to-emerald-500/70' : item.key === 'Cooked Food' ? 'from-amber-950/90 via-rose-700/70 to-orange-500/70' : 'from-slate-950/90 via-slate-700/70 to-slate-500/70'}`} />
-                      <div className="relative z-10 flex w-full items-center justify-between px-4 py-3 text-white">
-                        <div>
-                          <p className="text-xs font-medium uppercase tracking-[0.2em] text-white/80">Category</p>
-                          <p className="mt-1 text-sm font-semibold">{item.label}</p>
-                        </div>
-                        <span className="text-2xl">{item.icon}</span>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <label className="block">
-            <span className="mb-2 block text-sm font-semibold text-slate-800">Quantity</span>
-            <div className="grid grid-cols-[1fr_92px] gap-3">
-              <input
-                type="number"
-                min="0"
-                step="0.1"
-                required
-                value={form.dropoff}
-                onChange={(event) => setForm({ ...form, dropoff: event.target.value })}
-                placeholder="Amount"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-              />
-              <select
-                value={form.unit}
-                onChange={(event) => setForm({ ...form, unit: event.target.value })}
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-              >
-                <option value="KG">KG</option>
-                <option value="Ltrs">Ltrs</option>
-              </select>
-            </div>
-          </label>
-
-          <label className="block">
-            <span className="mb-2 block text-sm font-semibold text-slate-800">Expiry Time</span>
-            <input
-              type="time"
-              required
-              value={form.eta}
-              onChange={(event) => setForm({ ...form, eta: event.target.value })}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-            />
-          </label>
-
-          <div className="sm:col-span-2">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <span className="block text-sm font-semibold text-slate-800">Pickup Location</span>
-              <div className="inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1 text-xs font-semibold text-slate-600">
-                <button
-                  type="button"
-                  onClick={() => setPickupMode('manual')}
-                  className={`rounded-xl px-3 py-1.5 transition ${pickupMode === 'manual' ? 'bg-white text-slate-900 shadow-sm' : 'hover:text-slate-900'}`}
-                >
-                  Manual
-                </button>
-                <button
-                  type="button"
-                  onClick={detectPickupLocation}
-                  className={`ml-1 inline-flex items-center gap-1 rounded-xl px-3 py-1.5 transition ${pickupMode === 'auto' ? 'bg-white text-slate-900 shadow-sm' : 'hover:text-slate-900'}`}
-                >
-                  <LocateFixed size={12} />
-                  Auto detect
-                </button>
-              </div>
-            </div>
-            <input
-              type="text"
-              required
-              value={form.pickup}
-              onChange={(event) => setForm({ ...form, pickup: event.target.value })}
-              placeholder={pickupMode === 'auto' ? 'Auto-detected location' : '123 Market St'}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-            />
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <p className="text-xs text-slate-500">
-                {locationNotice || 'Choose manual entry or auto-detect your current location.'}
-              </p>
-              <button
-                type="button"
-                onClick={detectPickupLocation}
-                disabled={isDetectingLocation}
-                className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <LocateFixed size={14} />
-                {isDetectingLocation ? 'Detecting...' : 'Use current location'}
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 sm:col-span-2"
-          >
-            <Plus size={16} />
-            Donate Food
-          </button>
-        </form>
-      </div>
-
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <div className="mb-4">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm font-semibold">⚡ AI Suggestion:</p>
-            <p className="mt-1 text-sm text-slate-700">Deliver 30 meals to Hope Shelter (2 km, expires in 2 hrs)</p>
-          </div>
+        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-2">
+          <MetricCard icon={<MapPin size={22} className="text-cyan-600" />} value={String(bestNeeds.length)} label="Best Matches" accent="bg-cyan-50" />
+          <MetricCard icon={<Truck size={22} className="text-emerald-600" />} value={String(donorDonations.length)} label="My Donations" accent="bg-emerald-50" />
         </div>
-        <SectionTitle eyebrow="Recent Donations" title="Recent Donations" text="Track your recent food donations and their current status." />
 
         <div className="mt-6 space-y-3">
-          {shipments.map((shipment) => (
-            <ShipmentCard key={shipment.id} shipment={shipment} />
-          ))}
+          {bestNeeds.length > 0 ? (
+            bestNeeds.map((need) => <NeedCard key={need.id} need={need} />)
+          ) : (
+            <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No open needs are available right now.</div>
+          )}
+        </div>
+      </div>
+
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Recent Deliveries" title="Your latest food donations" text="Track what was matched, where it is going, and when it is completed." />
+
+        <div className="mt-6 space-y-3">
+          {donorDeliveries.length > 0 ? donorDeliveries.slice(0, 4).map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No deliveries have been created yet.</div>}
         </div>
       </div>
     </div>
   );
 }
 
-function AgentOverview() {
-  const [shipments, setShipments] = useState<Shipment[]>(AGENT_SHIPMENTS);
-
-  const advanceStatus = (id: number) => {
-    const order: ShipmentStatus[] = ['queued', 'assigned', 'in-transit', 'delivered'];
-
-    setShipments((current) =>
-      current.map((shipment) => {
-        if (shipment.id !== id) {
-          return shipment;
-        }
-
-        const nextIndex = Math.min(order.indexOf(shipment.status) + 1, order.length - 1);
-
-        return {
-          ...shipment,
-          status: order[nextIndex],
-          eta: order[nextIndex] === 'delivered' ? 'Delivered' : shipment.eta,
-        };
-      })
-    );
-  };
+function AgentOverview({ session, deliveries }: { session: Session; deliveries: DeliveryRecord[] }) {
+  const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered');
+  const completedDeliveries = deliveries.filter((delivery) => delivery.status === 'delivered');
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Assignments" title="Stay ahead of every pickup" text="Volunteers can move each job through the queue without leaving the dashboard." />
+    <div className="grid w-full gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Assignments" title="Deliver directly to need locations" text="Agents manage pickup, transit, and OTP-verified drop-off at the beneficiary location." />
 
-        <div className="mt-6 space-y-3">
-          {shipments.map((shipment) => (
-            <ShipmentCard key={shipment.id} shipment={shipment} onAdvance={() => advanceStatus(shipment.id)} />
-          ))}
+        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
+          <MetricCard icon={<Truck size={22} className="text-cyan-600" />} value={String(activeDeliveries.length)} label="Active Deliveries" accent="bg-cyan-50" />
+          <MetricCard icon={<CheckCircle2 size={22} className="text-emerald-600" />} value={String(completedDeliveries.length)} label="Delivered" accent="bg-emerald-50" />
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          <p className="font-semibold text-slate-900">{session.name}</p>
+          <p className="mt-1">Use the Deliveries tab to update status and confirm the OTP before completing a drop-off.</p>
         </div>
       </div>
 
       <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Route view" title="Delivery route checkpoints" text="Use a simple milestone view to keep the whole route visible on mobile and desktop." />
+        <SectionTitle eyebrow="Route view" title="Delivery route checkpoints" text="Use a simple milestone view to keep the delivery visible on mobile and desktop." />
 
         <div className="mt-6 space-y-4">
           {ROUTE_STEPS.map((step, index) => (
@@ -1234,105 +1210,808 @@ function AgentOverview() {
   );
 }
 
-function RequestsPanel({ session }: { session: Session }) {
-  return session.uiRole === 'donor' ? <CustomerRequestsPanel /> : session.uiRole === 'ngo' ? <NgoRequestsPanel /> : <AgentRequestsPanel />;
+function RequestsPanel({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
+  return session.uiRole === 'donor'
+    ? <CustomerRequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />
+    : session.uiRole === 'ngo'
+      ? <NgoRequestsPanel session={session} needs={needs} deliveries={deliveries} />
+      : <AgentRequestsPanel session={session} needs={needs} deliveries={deliveries} />;
 }
 
-function NgoRequestsPanel() {
-  const [items] = useState<Shipment[]>([
-    { id: 1, title: 'Bakery surplus intake', pickup: 'Sunrise Bakery', dropoff: 'City Relief Hub', eta: '15 min', status: 'queued', agent: 'Pending approval' },
-    { id: 2, title: 'Catering donation batch', pickup: 'Grand Hall', dropoff: 'North Community Kitchen', eta: '22 min', status: 'assigned', agent: 'Assigned to volunteer' },
-    { id: 3, title: 'Community pantry dispatch', pickup: 'West Pantry', dropoff: 'Shelter Network', eta: 'In transit', status: 'in-transit', agent: 'On the way' },
-  ]);
+function NeedsPanel({ session, needs }: { session: Session; needs: NeedRecord[] }) {
+  const [mealTypeFilter, setMealTypeFilter] = useState<MealType>('any');
+  const [categoryFilter, setCategoryFilter] = useState<FoodCategory>('any');
+
+  const visibleNeeds = needs
+    .filter((need) => isNeedCompatible(need, mealTypeFilter, categoryFilter))
+    .slice()
+    .sort((left, right) => {
+      const urgencyDelta = getUrgencyScore(left.urgency) - getUrgencyScore(right.urgency);
+      if (urgencyDelta !== 0) return urgencyDelta;
+      return left.requiredBefore - right.requiredBefore;
+    });
 
   return (
-    <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="Intake" title="Incoming surplus and assignment queue" text="NGOs can approve food, assign partners, and track what has already been matched." />
-      <div className="mt-6 grid gap-3">
-        {items.map((shipment) => (
-          <ShipmentCard key={shipment.id} shipment={shipment} />
-        ))}
+    <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+      <SectionTitle eyebrow="Live Needs" title="Beneficiary requests in real time" text="Open needs are visible to donors and delivery agents so food goes directly to the right location." />
+
+      <div className="mt-4 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-2 block text-sm font-semibold text-slate-800">Filter by Meal Type</span>
+          <select
+            value={mealTypeFilter}
+            onChange={(event) => setMealTypeFilter(event.target.value as MealType)}
+            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+          >
+            {MEAL_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-2 block text-sm font-semibold text-slate-800">Filter by Category</span>
+          <select
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value as FoodCategory)}
+            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+          >
+            {CATEGORY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-6 grid w-full grid-cols-1 gap-4 md:grid-cols-2">
+        {visibleNeeds.length > 0 ? visibleNeeds.map((need) => <NeedCard key={need.id} need={need} allowFulfill={session.uiRole === 'ngo'} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No live needs have been posted yet.</div>}
       </div>
     </div>
   );
 }
 
-function CustomerRequestsPanel() {
-  return (
-    <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="Food Donations" title="Your donation queue" text="Everything stays labeled clearly so donors can see what is pending, in transit, or delivered." />
-      <div className="mt-6 grid gap-3">
-        {CUSTOMER_SHIPMENTS.map((shipment) => (
-          <ShipmentCard key={shipment.id} shipment={shipment} />
-        ))}
-      </div>
-    </div>
-  );
-}
+function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
+  const [form, setForm] = useState<NeedFormState>({
+    address: '',
+    lat: '',
+    lng: '',
+    peopleCount: '',
+    foodType: '',
+    mealType: 'any',
+    category: 'any',
+    urgency: 'high',
+    requiredBefore: '',
+  });
+  const [notice, setNotice] = useState<string | null>(null);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [showMapPicker, setShowMapPicker] = useState(false);
 
-function AgentRequestsPanel() {
-  const [shipments, setShipments] = useState<Shipment[]>(AGENT_SHIPMENTS);
+  const selectedNeedCoordinates = toCoordinates(form.lat, form.lng);
 
-  const advanceStatus = (id: number) => {
-    const order: ShipmentStatus[] = ['queued', 'assigned', 'in-transit', 'delivered'];
+  const detectLocation = () => {
+    if (!navigator.geolocation) {
+      setNotice('Location detection is not supported in this browser.');
+      return;
+    }
 
-    setShipments((current) =>
-      current.map((shipment) => {
-        if (shipment.id !== id) {
-          return shipment;
-        }
-
-        const nextIndex = Math.min(order.indexOf(shipment.status) + 1, order.length - 1);
-
-        return { ...shipment, status: order[nextIndex], eta: order[nextIndex] === 'delivered' ? 'Delivered' : shipment.eta };
-      })
+    setIsDetectingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setForm((current) => ({
+          ...current,
+          lat: position.coords.latitude.toFixed(6),
+          lng: position.coords.longitude.toFixed(6),
+          address: current.address || `Selected from map (${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)})`,
+        }));
+        setNotice('Need location detected successfully.');
+        setIsDetectingLocation(false);
+      },
+      () => {
+        setNotice('Unable to detect location. Please enter coordinates manually.');
+        setIsDetectingLocation(false);
+      }
     );
   };
 
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (session.uiRole !== 'ngo') {
+      setNotice('Only NGO users can create needs.');
+      return;
+    }
+
+    const latitude = Number(form.lat);
+    const longitude = Number(form.lng);
+    const requiredBefore = Date.parse(form.requiredBefore);
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isFinite(requiredBefore)) {
+      setNotice('Please add a valid address, coordinates, and required time.');
+      return;
+    }
+
+    try {
+      await createNeed({
+        ngoId: session.email,
+        ngoName: session.name,
+        location: { lat: latitude, lng: longitude, address: form.address },
+        peopleCount: Number(form.peopleCount),
+        foodType: form.foodType,
+        mealType: form.mealType,
+        category: form.category,
+        urgency: form.urgency,
+        requiredBefore,
+      });
+
+      setForm({ address: '', lat: '', lng: '', peopleCount: '', foodType: '', mealType: 'any', category: 'any', urgency: 'high', requiredBefore: '' });
+      setNotice('Need posted successfully.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to post need.');
+    }
+  };
+
+  const activeNeeds = needs.filter((need) => need.status !== 'fulfilled');
+  const ngoNeedIds = new Set(needs.filter((need) => need.ngoId === session.email).map((need) => need.id));
+  const incomingDeliveries = deliveries.filter((delivery) => ngoNeedIds.has(delivery.needId) && delivery.status !== 'delivered');
+
+  const markFulfilled = async (needId: string) => {
+    try {
+      await updateNeed(needId, { status: 'fulfilled' });
+      setNotice('Need marked as fulfilled.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to update need.');
+    }
+  };
+
   return (
-    <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="Assignments" title="Delivery jobs in motion" text="The agent view highlights jobs that can be advanced with one tap or click." />
-      <div className="mt-6 space-y-3">
-        {shipments.map((shipment) => (
-          <ShipmentCard key={shipment.id} shipment={shipment} onAdvance={() => advanceStatus(shipment.id)} />
-        ))}
+    <div className="grid w-full gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Post Need" title="Create a beneficiary request" text="Only NGO users can post live needs that donors and delivery agents can match against." />
+        <div className="mt-4">
+          <button type="button" className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+            <Plus size={14} />
+            + Create Need
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
+          <SimpleInput label="Location Address" value={form.address} onChange={(value) => setForm({ ...form, address: value })} placeholder="School hall, shelter, relief center" />
+          <SimpleInput label="People Count" value={form.peopleCount} onChange={(value) => setForm({ ...form, peopleCount: value })} placeholder="120" />
+          <SimpleInput label="Latitude" value={form.lat} onChange={(value) => setForm({ ...form, lat: value })} placeholder="12.9716" />
+          <SimpleInput label="Longitude" value={form.lng} onChange={(value) => setForm({ ...form, lng: value })} placeholder="77.5946" />
+
+          <div className="sm:col-span-2">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-800">Select location from map</p>
+              <button
+                type="button"
+                onClick={() => setShowMapPicker((current) => !current)}
+                className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+              >
+                <MapPin size={14} />
+                {showMapPicker ? 'Hide map' : 'Open map picker'}
+              </button>
+            </div>
+            {showMapPicker ? (
+              <LocationPickerMap
+                selected={selectedNeedCoordinates}
+                onSelect={(coords) => {
+                  setForm((current) => ({
+                    ...current,
+                    lat: coords.lat.toFixed(6),
+                    lng: coords.lng.toFixed(6),
+                    address: current.address || `Selected from map (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`,
+                  }));
+                  setNotice('Location selected from map.');
+                }}
+              />
+            ) : null}
+          </div>
+
+          <label className="block sm:col-span-2">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Food Type</span>
+            <input
+              type="text"
+              required
+              value={form.foodType}
+              onChange={(event) => setForm({ ...form, foodType: event.target.value })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+              placeholder="Prepared meals, bread, dry groceries"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Meal Type</span>
+            <select
+              value={form.mealType}
+              onChange={(event) => setForm({ ...form, mealType: event.target.value as MealType })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            >
+              {MEAL_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Category</span>
+            <select
+              value={form.category}
+              onChange={(event) => setForm({ ...form, category: event.target.value as FoodCategory })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            >
+              {CATEGORY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Urgency</span>
+            <select
+              value={form.urgency}
+              onChange={(event) => setForm({ ...form, urgency: event.target.value as NeedUrgency })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            >
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Required Before</span>
+            <input
+              type="datetime-local"
+              required
+              value={form.requiredBefore}
+              onChange={(event) => setForm({ ...form, requiredBefore: event.target.value })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            />
+          </label>
+
+          <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={detectLocation}
+              disabled={isDetectingLocation}
+              className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <LocateFixed size={14} />
+              {isDetectingLocation ? 'Detecting...' : 'Use current location'}
+            </button>
+            {notice ? <p className="text-sm text-slate-600">{notice}</p> : null}
+          </div>
+
+          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 sm:col-span-2">
+            <Plus size={16} />
+            Post Need
+          </button>
+        </form>
+      </div>
+
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Active Needs" title="Live needs and incoming deliveries" text="Monitor open needs and incoming deliveries routed to need locations." />
+        <div className="mt-6 space-y-3">
+          {activeNeeds.length > 0 ? activeNeeds.map((need) => <NeedCard key={need.id} need={need} allowFulfill onFulfill={() => markFulfilled(need.id)} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No active needs yet.</div>}
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Incoming Deliveries</h3>
+          <div className="mt-3 space-y-3">
+            {incomingDeliveries.length > 0 ? incomingDeliveries.map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No incoming deliveries for this NGO yet.</div>}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function TrackingPanel({ session }: { session: Session }) {
+function CustomerRequestsPanel({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
+  const [form, setForm] = useState<DonationFormState>({
+    foodType: '',
+    mealType: 'any',
+    category: 'any',
+    quantity: '',
+    pickupLocation: '',
+    pickupLat: '',
+    pickupLng: '',
+    expiryTime: 'within-2-hours',
+    notificationEnabled: true,
+    notes: '',
+  });
+  const [notice, setNotice] = useState<string | null>(null);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+
+  const detectPickupLocation = () => {
+    if (!navigator.geolocation) {
+      setNotice('Location detection is not supported in this browser.');
+      return;
+    }
+
+    setIsDetectingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setForm((current) => ({
+          ...current,
+          pickupLat: position.coords.latitude.toFixed(6),
+          pickupLng: position.coords.longitude.toFixed(6),
+          pickupLocation: current.pickupLocation || 'Current location',
+        }));
+        setNotice('Pickup location detected successfully.');
+        setIsDetectingLocation(false);
+      },
+      () => {
+        setNotice('Unable to detect your location. Please enter it manually.');
+        setIsDetectingLocation(false);
+      }
+    );
+  };
+
+  const myDeliveries = deliveries.filter((delivery) => delivery.donorId === session.email);
+  const myDonations = donations.filter((donation) => donation.donorId === session.email);
+  const donorCoordinates = toCoordinates(form.pickupLat, form.pickupLng);
+  const needsMap = needs.reduce<Record<string, NeedRecord>>((accumulator, need) => {
+    accumulator[need.id] = need;
+    return accumulator;
+  }, {});
+
+  const prevDonationStatusRef = useRef<Record<string, string>>({});
+  const shownAssignedNotifications = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!session) return;
+
+    donations.forEach((donation) => {
+      if (donation.donorId !== session.email) return;
+
+      const prev = prevDonationStatusRef.current[donation.id];
+      if (
+        prev === 'pending' &&
+        donation.status === 'assigned' &&
+        donation.notificationEnabled &&
+        !shownAssignedNotifications.current.has(donation.id)
+      ) {
+        const addr = donation.assignedNeedId ? (needsMap[donation.assignedNeedId]?.location.address || donation.assignedNeedId) : 'an NGO';
+        setNotice(`✅ Matched to ${addr}`);
+        shownAssignedNotifications.current.add(donation.id);
+      }
+
+      prevDonationStatusRef.current[donation.id] = donation.status;
+    });
+  }, [donations, session, needsMap]);
+
+  const submitDonation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!form.expiryTime) {
+      setNotice('Please select an expiry time for your donation.');
+      return;
+    }
+
+    const expiryTimeStamp = convertExpiryTimeToTimestamp(form.expiryTime);
+    if (expiryTimeStamp <= Date.now()) {
+      setNotice('Expiry time must be in the future.');
+      return;
+    }
+
+    const pickupCoordinates = donorCoordinates;
+
+    try {
+      // Always create donation (pending)
+      const donationId = await createDonationRecord({
+        donorId: session.email,
+        foodType: form.foodType,
+        mealType: form.mealType,
+        category: form.category,
+        quantity: form.quantity,
+        expiryTime: expiryTimeStamp,
+        location: {
+          address: form.pickupLocation,
+          lat: pickupCoordinates?.lat ?? 0,
+          lng: pickupCoordinates?.lng ?? 0,
+        },
+        status: 'pending',
+        assignedNeedId: '',
+      });
+
+      // Try an immediate match locally for quicker UX
+      const selectedNeed = selectBestNeedByScore(needs.filter((need) => need.status === 'open'), pickupCoordinates, form.mealType, form.category, expiryTimeStamp);
+
+      if (selectedNeed) {
+        const otp = generateOtp();
+        // mark donation assigned
+        await updateDonation(donationId, { status: 'assigned', assignedNeedId: selectedNeed.id });
+
+        await createDelivery({
+          donorId: session.email,
+          donorName: session.name,
+          ngoId: selectedNeed.ngoId,
+          agentId: null,
+          donationId,
+          pickupLocation: {
+            address: form.pickupLocation,
+            lat: pickupCoordinates?.lat ?? 0,
+            lng: pickupCoordinates?.lng ?? 0,
+          },
+          dropLocation: selectedNeed.location,
+          needId: selectedNeed.id,
+          agentLocation: null,
+          foodType: form.foodType,
+          mealType: form.mealType,
+          category: form.category,
+          quantity: form.quantity,
+          status: 'pending',
+          otp,
+        });
+
+        await updateNeed(selectedNeed.id, { status: 'assigned' });
+        setNotice(`✅ Matched to ${selectedNeed.location.address}`);
+      } else {
+        setNotice('⏳ No matching need yet. We\'ll notify you when a request appears.');
+      }
+
+      setForm({ foodType: '', mealType: 'any', category: 'any', quantity: '', pickupLocation: '', pickupLat: '', pickupLng: '', expiryTime: 'within-2-hours', notificationEnabled: true, notes: '' });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to create donation.');
+    }
+  };
+
+  return (
+    <div className="grid w-full gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Donate Food" title="Match surplus before it expires" text="Your food will be matched based on urgency, distance, and expiry time." />
+
+        <form onSubmit={submitDonation} className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
+          <SimpleInput label="Food Type" value={form.foodType} onChange={(value) => setForm({ ...form, foodType: value })} placeholder="Prepared meals, bread, groceries" />
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Meal Type</span>
+            <select
+              value={form.mealType}
+              onChange={(event) => setForm({ ...form, mealType: event.target.value as MealType })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            >
+              {MEAL_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Category</span>
+            <select
+              value={form.category}
+              onChange={(event) => setForm({ ...form, category: event.target.value as FoodCategory })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            >
+              {CATEGORY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <SimpleInput label="Quantity" value={form.quantity} onChange={(value) => setForm({ ...form, quantity: value })} placeholder="25 meals" />
+          <SimpleInput label="Pickup Location" value={form.pickupLocation} onChange={(value) => setForm({ ...form, pickupLocation: value })} placeholder="Restaurant, home kitchen, shop" />
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Expiry Time (when food will expire)</span>
+            <select
+              value={form.expiryTime}
+              onChange={(event) => setForm({ ...form, expiryTime: event.target.value as 'within-1-hour' | 'within-2-hours' | 'within-4-hours' | 'today' })}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            >
+              {EXPIRY_TIME_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <SimpleInput label="Pickup Latitude" value={form.pickupLat} onChange={(value) => setForm({ ...form, pickupLat: value })} placeholder="12.9716" />
+          <SimpleInput label="Pickup Longitude" value={form.pickupLng} onChange={(value) => setForm({ ...form, pickupLng: value })} placeholder="77.5946" />
+
+          <label className="block sm:col-span-2">
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Notes</span>
+            <textarea
+              value={form.notes}
+              onChange={(event) => setForm({ ...form, notes: event.target.value })}
+              className="min-h-24 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+              placeholder="Food safety notes, special handling, or donor instructions"
+            />
+          </label>
+
+          <label className="block sm:col-span-2">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={form.notificationEnabled}
+                onChange={(e) => setForm({ ...form, notificationEnabled: e.target.checked })}
+                className="h-4 w-4 rounded border-slate-200 text-cyan-600"
+              />
+              <span className="text-sm text-slate-800">Notify me when matched</span>
+            </div>
+          </label>
+
+          <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={detectPickupLocation}
+              disabled={isDetectingLocation}
+              className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <LocateFixed size={14} />
+              {isDetectingLocation ? 'Detecting...' : 'Use current location'}
+            </button>
+            {notice ? <p className="text-sm text-slate-600">{notice}</p> : null}
+          </div>
+
+          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 sm:col-span-2">
+            <Plus size={16} />
+            Match and Deliver
+          </button>
+        </form>
+      </div>
+
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="My Donations" title="Your donations" text="See pending donations and their match status. Cancel a pending donation anytime." />
+
+        <div className="mt-4 space-y-3">
+          {myDonations.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">You have no donations yet.</div>
+          ) : (
+            myDonations.map((donation) => (
+              <div key={donation.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="font-semibold text-slate-900">{donation.foodType}</p>
+                    <p className="mt-1 text-slate-600">Quantity: {donation.quantity}</p>
+                    <p className="mt-1 text-xs text-slate-500">Pickup: {donation.location.address}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-slate-700">{donation.status}</p>
+                    {donation.status === 'pending' ? (
+                      <p className="text-xs text-slate-500">Waiting for match</p>
+                    ) : donation.status === 'assigned' ? (
+                      <p className="text-xs text-slate-500">Matched to: {donation.assignedNeedId ? (needsMap[donation.assignedNeedId]?.location.address || donation.assignedNeedId) : 'Assigned'}</p>
+                    ) : donation.status === 'expired' ? (
+                      <p className="text-xs text-rose-600">Expired</p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between">
+                  <div className="text-xs text-slate-500">Created: {new Date(donation.createdAt).toLocaleString()}</div>
+                  <div>
+                    {donation.status === 'pending' ? (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await updateDonation(donation.id, { status: 'cancelled' });
+                            setNotice('Donation cancelled.');
+                          } catch {
+                            setNotice('Unable to cancel donation.');
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 rounded-2xl bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="mt-6 space-y-3">
+          {myDeliveries.length > 0 ? myDeliveries.slice(0, 4).map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No deliveries have been matched yet.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
+  const [otpInputs, setOtpInputs] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
+  const currentUserId = session.uid || session.email;
+  const needsById = needs.reduce<Record<string, NeedRecord>>((accumulator, need) => {
+    accumulator[need.id] = need;
+    return accumulator;
+  }, {});
+
+  const visibleAssignments = deliveries
+    .filter((delivery) => delivery.status !== 'delivered' && (delivery.agentId == null || delivery.agentId === currentUserId || delivery.agentId === 'unassigned'))
+    .sort((left, right) => {
+      const order: Record<DeliveryStatus, number> = { pending: 0, accepted: 1, picked: 2, in_transit: 3, delivered: 4 };
+      return order[left.status] - order[right.status];
+    });
+
+  const liveAssignmentIdsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    liveAssignmentIdsRef.current = deliveries
+      .filter((delivery) => delivery.agentId === currentUserId && delivery.status !== 'delivered')
+      .map((delivery) => delivery.id);
+  }, [deliveries, currentUserId]);
+
+  useEffect(() => {
+    if (session.uiRole !== 'volunteer' || typeof navigator === 'undefined' || !navigator.geolocation) {
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const agentLocation = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          address: 'Live agent location',
+        };
+
+        liveAssignmentIdsRef.current.forEach((deliveryId) => {
+          void updateDelivery(deliveryId, { agentLocation });
+        });
+      },
+      () => {
+        setNotice('Enable location sharing to keep live delivery tracking updated.');
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 15000,
+      }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [currentUserId, session.uiRole]);
+
+  const updateStatus = async (delivery: DeliveryRecord, nextStatus: 'accepted' | 'picked' | 'in_transit' | 'delivered') => {
+    try {
+      if (nextStatus === 'delivered') {
+        const otp = otpInputs[delivery.id] || window.prompt('Enter OTP to complete the delivery') || '';
+
+        if (otp !== delivery.otp) {
+          setNotice('OTP does not match. Delivery blocked.');
+          return;
+        }
+
+        await updateDelivery(delivery.id, { status: 'delivered', agentId: currentUserId });
+        await updateDonation(delivery.donationId, { status: 'completed' });
+        await updateNeed(delivery.needId, { status: 'fulfilled' });
+        setNotice('Delivery completed and synced across donor and NGO dashboards.');
+        return;
+      }
+
+      await updateDelivery(delivery.id, {
+        status: nextStatus,
+        agentId: currentUserId,
+      });
+
+      setNotice(nextStatus === 'accepted' ? 'Delivery accepted.' : `Delivery marked as ${nextStatus.replace('_', ' ')}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to update delivery.');
+    }
+  };
+
+  return (
+    <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+      <SectionTitle eyebrow="My Assignments" title="Delivery execution queue" text="Volunteer sees only actionable deliveries and updates pickup, transit, and completion in real time." />
+      {notice ? <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div> : null}
+
+      <div className="mt-6 space-y-4">
+        {visibleAssignments.length > 0 ? visibleAssignments.map((delivery) => {
+          const need = needsById[delivery.needId];
+          const currentPoint = delivery.agentLocation || delivery.pickupLocation;
+          const distanceKm = calculateDistanceKm(currentPoint ? { lat: currentPoint.lat, lng: currentPoint.lng } : null, { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng });
+          const etaMinutes = Number.isFinite(distanceKm) ? Math.max(1, Math.round((distanceKm / 20) * 60)) : null;
+          const urgencyTone = need?.urgency === 'high' ? 'bg-rose-100 text-rose-700' : need?.urgency === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
+          const statusLabel = delivery.status === 'pending' ? 'Pending' : delivery.status === 'accepted' ? 'Accepted' : delivery.status === 'picked' ? 'Picked Up' : delivery.status === 'in_transit' ? 'In Transit' : 'Delivered';
+
+          return (
+            <div key={delivery.id} className="w-full space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    <span>Assignment #{delivery.id.slice(-6)}</span>
+                    <span className={`rounded-full px-3 py-1 ${urgencyTone}`}>{need?.urgency ? `${need.urgency.toUpperCase()} urgency` : 'Priority'}</span>
+                  </div>
+                  <p className="text-lg font-semibold text-slate-900">{delivery.foodType || 'Food delivery'}</p>
+                  <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                    <p className="inline-flex items-center gap-2"><Building2 size={14} className="shrink-0 text-emerald-600" />Pickup: {delivery.pickupLocation.address}</p>
+                    <p className="inline-flex items-center gap-2"><MapPin size={14} className="shrink-0 text-cyan-600" />Drop: {delivery.dropLocation.address}</p>
+                    <p className="inline-flex items-center gap-2"><ClipboardList size={14} className="shrink-0 text-slate-500" />Quantity: {delivery.quantity || 'Not set'}</p>
+                    <p className="inline-flex items-center gap-2"><Route size={14} className="shrink-0 text-slate-500" />Distance: {Number.isFinite(distanceKm) ? `${distanceKm.toFixed(1)} km` : '—'}{etaMinutes ? ` · ETA ${etaMinutes} min` : ''}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusLabel === 'Delivered' ? 'bg-emerald-100 text-emerald-700' : statusLabel === 'In Transit' ? 'bg-amber-100 text-amber-700' : statusLabel === 'Picked Up' ? 'bg-cyan-100 text-cyan-700' : 'bg-slate-100 text-slate-700'}`}>
+                      {statusLabel}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                      {delivery.agentId === currentUserId ? 'Assigned to you' : 'Available to accept'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex shrink-0 flex-col gap-2 lg:w-[260px]">
+                  {delivery.status === 'pending' ? (
+                    <button type="button" onClick={() => updateStatus(delivery, 'accepted')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+                      Accept Delivery
+                    </button>
+                  ) : null}
+
+                  {delivery.status === 'accepted' ? (
+                    <button type="button" onClick={() => updateStatus(delivery, 'picked')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
+                      Picked Up
+                    </button>
+                  ) : null}
+
+                  {delivery.status === 'picked' ? (
+                    <button type="button" onClick={() => updateStatus(delivery, 'in_transit')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
+                      In Transit
+                    </button>
+                  ) : null}
+
+                  {delivery.status === 'in_transit' ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={otpInputs[delivery.id] || ''}
+                        onChange={(event) => setOtpInputs((current) => ({ ...current, [delivery.id]: event.target.value }))}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                        placeholder="Enter OTP"
+                      />
+                      <button type="button" onClick={() => updateStatus(delivery, 'delivered')} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
+                        Deliver (Enter OTP)
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <ShipmentCard delivery={delivery} />
+            </div>
+          );
+        }) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No assignments are available right now.</div>}
+      </div>
+    </div>
+  );
+}
+
+function TrackingPanel({ session, donations, deliveries }: { session: Session; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
   const accent = session.uiRole === 'donor' ? 'from-cyan-50 to-sky-50' : session.uiRole === 'ngo' ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50';
+  const latestDeliveries = deliveries.slice(0, 3);
+  const activeDonations = donations.filter((donation) => donation.status !== 'completed').length;
 
   return (
     <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
       <SectionTitle
         eyebrow="Delivery Tracking"
-        title={session.uiRole === 'donor' ? 'Monitor your deliveries' : session.uiRole === 'ngo' ? 'Follow donation handoffs' : 'Plan your route checkpoints'}
-        text="A simple tracking layout keeps the delivery-service flow easy to understand without extra noise."
+        title={session.uiRole === 'donor' ? 'Monitor your deliveries' : session.uiRole === 'ngo' ? 'Follow need-based handoffs' : 'Plan your route checkpoints'}
+        text="A simple tracking layout keeps the delivery flow easy to understand without extra noise."
       />
 
       <div className={`mt-6 rounded-[2rem] border border-slate-200 bg-gradient-to-br ${accent} p-6`}>
-        <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+        <div className="grid w-full gap-4 xl:grid-cols-[0.95fr_1.05fr] xl:items-center">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
               <MapPin size={14} /> Route view
             </div>
-            <h3 className="mt-4 text-2xl font-bold tracking-tight text-slate-900">{session.uiRole === 'donor' ? 'Live delivery tracking' : session.uiRole === 'ngo' ? 'Donation handoff tracking' : 'Delivery route overview'}</h3>
+            <h3 className="mt-4 text-2xl font-bold tracking-tight text-slate-900">{session.uiRole === 'donor' ? 'Live delivery tracking' : session.uiRole === 'ngo' ? 'Need location tracking' : 'Delivery route overview'}</h3>
             <p className="mt-3 text-sm leading-6 text-slate-600">
               {session.uiRole === 'donor'
-                ? 'Follow the package through pickup, transit, and completion without leaving the dashboard.'
+                ? 'Follow each pickup through transit and completion without leaving the dashboard.'
                 : session.uiRole === 'ngo'
-                  ? 'Track when a donation is approved, matched, handed off, and received by a partner.'
+                  ? 'Track when food reaches the beneficiary location and the need is fulfilled.'
                   : 'Check the next stop, current job status, and your progress through the route.'}
             </p>
+            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Delivery flow: Need - Assigned - In Transit - Delivered</p>
+            <p className="mt-2 text-sm text-slate-600">Active donations: {activeDonations}</p>
           </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-            <TrackingChip title="Pickup Confirmed" subtitle="Volunteer confirmed pickup" />
-            <TrackingChip title="In Transit" subtitle="Volunteer on route" />
-            <TrackingChip title="Delivered to NGO" subtitle="Handed to partner" />
-            <TrackingChip title="Distributed" subtitle="Meals distributed to community" />
+          <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
+            {latestDeliveries.length > 0 ? latestDeliveries.map((delivery) => (
+              <ShipmentCard key={delivery.id} delivery={delivery} />
+            )) : (
+              <div className="rounded-3xl border border-white/70 bg-white/85 p-4 text-sm text-slate-500">No deliveries available yet.</div>
+            )}
           </div>
         </div>
       </div>
@@ -1344,8 +2023,8 @@ function ProfilePanel({ session, onLogout }: { session: Session; onLogout: () =>
   const displayRoleLabel = getDisplayRoleLabel(session);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+    <div className="grid w-full gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
         <SectionTitle eyebrow="Profile" title="Account details" text="A compact profile area keeps role information visible and easy to review." />
 
         <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
@@ -1359,7 +2038,7 @@ function ProfilePanel({ session, onLogout }: { session: Session; onLogout: () =>
             </div>
           </div>
 
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <div className="mt-5 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
             <ProfileField label="Role" value={displayRoleLabel} />
             <ProfileField label="Status" value="Active" />
             <ProfileField label="Donor" value={session.uiRole === 'ngo' ? 'NGO coordination desk' : displayRoleLabel} />
@@ -1370,10 +2049,10 @@ function ProfilePanel({ session, onLogout }: { session: Session; onLogout: () =>
         </div>
       </div>
 
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
         <SectionTitle eyebrow="Actions" title="Keep the workspace ready" text="Use the sign-out action below or continue working in the donation dashboard." />
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
           <ActionCard icon={<BarChart3 size={18} />} title="Usage summary" text="Track activity from the overview panel." />
           <ActionCard icon={<Building2 size={18} />} title="Company settings" text="Keep brand and access details in one place." />
           <ActionCard icon={<Route size={18} />} title="Routing" text="Use live route checkpoints for delivery progress." />
@@ -1409,53 +2088,59 @@ function SimpleInput({ label, value, onChange, placeholder }: { label: string; v
   );
 }
 
-function ShipmentCard({ shipment, onAdvance }: { shipment: Shipment; onAdvance?: () => void }) {
-  const statusMeta: Record<ShipmentStatus, { label: string; tone: string }> = {
-    queued: { label: 'Pending', tone: 'bg-slate-100 text-slate-700' },
-    assigned: { label: 'In Transit', tone: 'bg-cyan-100 text-cyan-700' },
-    'in-transit': { label: 'In Transit', tone: 'bg-amber-100 text-amber-700' },
-    delivered: { label: 'Delivered', tone: 'bg-emerald-100 text-emerald-700' },
+function NeedCard({ need, allowFulfill = false, onFulfill }: { need: NeedRecord; allowFulfill?: boolean; onFulfill?: () => void }) {
+  const urgencyMeta: Record<NeedUrgency, { label: string; tone: string }> = {
+    high: { label: 'High', tone: 'bg-rose-100 text-rose-700' },
+    medium: { label: 'Medium', tone: 'bg-amber-100 text-amber-700' },
+    low: { label: 'Low', tone: 'bg-emerald-100 text-emerald-700' },
   };
 
+  const requiredTime = Number.isFinite(need.requiredBefore) ? new Date(need.requiredBefore).toLocaleString() : 'ASAP';
+
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
+    <div className="w-full rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2 text-sm text-slate-500">
-            <ClipboardList size={14} /> Donation #{shipment.id}
+            <MapPin size={14} /> {need.location.address}
           </div>
-          <p className="mt-1 font-semibold text-slate-900">{shipment.title}</p>
+          <p className="mt-1 font-semibold text-slate-900">{need.foodType}</p>
         </div>
 
-        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusMeta[shipment.status].tone}`}>
-          {statusMeta[shipment.status].label}
+        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${urgencyMeta[need.urgency].tone}`}>
+          {urgencyMeta[need.urgency].label}
         </span>
       </div>
 
       <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-[1fr_1fr] sm:items-center">
         <div className="flex items-center gap-2">
           <Building2 size={14} className="shrink-0 text-emerald-600" />
-          <span className="truncate">{shipment.dropoff}</span>
+          <span>{need.peopleCount} people</span>
         </div>
         <div className="flex items-center gap-2 sm:justify-end">
           <Clock3 size={14} className="shrink-0 text-slate-400" />
-          <span>{shipment.eta}</span>
+          <span>By {requiredTime}</span>
         </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">{(need.mealType || 'any').toUpperCase()}</span>
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">{(need.category || 'any').replace('-', ' ').replace('-', ' ')}</span>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-sm text-slate-500">
         <span className="inline-flex items-center gap-2">
-          <Building2 size={14} />
-          {shipment.dropoff}
+          <ClipboardList size={14} />
+          {need.status}
         </span>
 
-        {onAdvance ? (
+        {allowFulfill && onFulfill ? (
           <button
             type="button"
-            onClick={onAdvance}
+            onClick={onFulfill}
             className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
           >
-            Advance status
+            Mark fulfilled
             <ArrowRight size={14} />
           </button>
         ) : null}
@@ -1464,18 +2149,110 @@ function ShipmentCard({ shipment, onAdvance }: { shipment: Shipment; onAdvance?:
   );
 }
 
-function TrackingChip({ title, subtitle }: { title: string; subtitle: string }) {
+function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
+  const statusMeta: Record<DeliveryStatus, { label: string; tone: string }> = {
+    pending: { label: 'Pending', tone: 'bg-slate-100 text-slate-700' },
+    accepted: { label: 'Accepted', tone: 'bg-cyan-100 text-cyan-700' },
+    picked: { label: 'Picked Up', tone: 'bg-cyan-100 text-cyan-700' },
+    in_transit: { label: 'In Transit', tone: 'bg-amber-100 text-amber-700' },
+    delivered: { label: 'Delivered', tone: 'bg-emerald-100 text-emerald-700' },
+  };
+
   return (
-    <div className="rounded-3xl border border-white/70 bg-white/85 p-4 shadow-sm">
-      <p className="text-sm font-semibold text-slate-900">{title}</p>
-      <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
+    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <ClipboardList size={14} /> Delivery #{delivery.id.slice(-6)}
+          </div>
+          <p className="mt-1 font-semibold text-slate-900">{delivery.foodType || 'Food delivery'}</p>
+        </div>
+
+        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusMeta[delivery.status].tone}`}>
+          {statusMeta[delivery.status].label}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-[1fr_1fr] sm:items-center">
+        <div className="flex items-center gap-2">
+          <Building2 size={14} className="shrink-0 text-emerald-600" />
+          <span className="truncate">Pickup: {delivery.pickupLocation.address}</span>
+        </div>
+        <div className="flex items-center gap-2 sm:justify-end">
+          <MapPin size={14} className="shrink-0 text-cyan-600" />
+          <span className="truncate">Need: {delivery.dropLocation.address}</span>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-sm text-slate-500">
+        <span className="inline-flex items-center gap-2">
+          <Clock3 size={14} />
+          {delivery.quantity ? `${delivery.quantity}` : 'Quantity not set'}
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <ShieldCheck size={14} />
+          OTP ending {delivery.otp.slice(-2)}
+        </span>
+      </div>
+
+      <div className="mt-4">
+        <BikeTracker delivery={delivery} />
+      </div>
+    </div>
+  );
+}
+
+function BikeTracker({ delivery }: { delivery: DeliveryRecord }) {
+  const steps: DeliveryStatus[] = DELIVERY_STATUS_STEPS;
+  const start = { lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng };
+  const dest = { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng };
+  const agentLocation = (delivery as unknown as { agentLocation?: { lat: number; lng: number } }).agentLocation;
+
+  const current = agentLocation ? { lat: agentLocation.lat, lng: agentLocation.lng } : start;
+  const totalKm = calculateDistanceKm(start, dest) || 0.0001;
+  const coveredKm = calculateDistanceKm(start, current);
+  let progress = Math.max(0, Math.min(1, coveredKm / totalKm));
+
+  const statusIndex = steps.indexOf(delivery.status as DeliveryStatus);
+  if (!agentLocation && statusIndex >= 0) {
+    progress = statusIndex / Math.max(1, steps.length - 1);
+  }
+
+  return (
+    <div className="w-full">
+      <div className="relative h-10">
+        <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2">
+          <div className="h-1 w-full rounded-full bg-slate-100" />
+        </div>
+
+        <div className="absolute left-0 right-0 top-0 h-10">
+          <div className="relative h-full">
+            <motion.div
+              initial={false}
+              animate={{ left: `${progress * 100}%` }}
+              transition={{ type: 'spring', stiffness: 120, damping: 18 }}
+              className="absolute top-1/2 -translate-y-1/2"
+              style={{ position: 'absolute', transform: 'translate(-50%, -50%)' }}
+            >
+              <div className="inline-flex items-center justify-center rounded-full bg-white p-2 shadow">
+                <span className="text-lg">🚲</span>
+              </div>
+            </motion.div>
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+        <span>Start</span>
+        <span>{delivery.status.replace('_', ' ')}</span>
+        <span>Dest</span>
+      </div>
     </div>
   );
 }
 
 function ProfileField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white bg-white p-4">
+    <div className="w-full rounded-2xl border border-white bg-white p-4">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</p>
       <p className="mt-2 text-sm font-semibold text-slate-900">{value}</p>
     </div>
@@ -1484,7 +2261,7 @@ function ProfileField({ label, value }: { label: string; value: string }) {
 
 function ActionCard({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+    <div className="w-full rounded-3xl border border-slate-200 bg-slate-50 p-4">
       <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-slate-700 shadow-sm">{icon}</div>
       <p className="mt-4 text-sm font-semibold text-slate-900">{title}</p>
       <p className="mt-1 text-sm leading-6 text-slate-500">{text}</p>
@@ -1503,6 +2280,10 @@ function App() {
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [migrationDone, setMigrationDone] = useState(false);
+  const [needs, setNeeds] = useState<NeedRecord[]>(EMPTY_NEEDS);
+  const [donations, setDonations] = useState<DonationRecord[]>(EMPTY_DONATIONS);
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(EMPTY_DELIVERIES);
+  const [isOffline, setIsOffline] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1555,11 +2336,12 @@ function App() {
         const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
         const role = (profile?.role as Role) || 'customer';
         const uiRole = (profile?.uiRole as UiRole) || (profile?.displayRoleLabel === 'Volunteer' ? 'volunteer' : profile?.displayRoleLabel === 'NGO' ? 'ngo' : 'donor');
-        setSession({ name, email: user.email || '', role, uiRole, displayRoleLabel: profile?.displayRoleLabel });
+        setSession({ uid: user.uid, name, email: user.email || '', role, uiRole, displayRoleLabel: profile?.displayRoleLabel });
         setPage('app');
         setDashboardView('overview');
       } catch {
         setSession({
+          uid: user.uid,
           name: user.displayName || user.email?.split('@')[0] || 'User',
           email: user.email || '',
           role: 'customer',
@@ -1594,7 +2376,7 @@ function App() {
             // Try to sign in — if succeeds, ensure profile exists; then sign out
             const user = await fbSignInWithEmail(acct.email, acct.password);
             try {
-              const profile = await fbGetUserProfile((user as any).uid);
+              const profile = await fbGetUserProfile(user.uid);
               if (!profile) {
                 await signUpWithEmail(acct.email, acct.password, acct.name, acct.role);
               }
@@ -1609,7 +2391,7 @@ function App() {
             try {
               await signUpWithEmail(acct.email, acct.password, acct.name, acct.role);
               await fbSignOut();
-            } catch (err) {
+            } catch {
               // ignore individual account failures
             }
           }
@@ -1620,7 +2402,7 @@ function App() {
           setMigrationDone(true);
           setAuthNotice('Demo accounts migrated to Firebase.');
         }
-      } catch (err) {
+      } catch {
         // migration overall failed; do nothing
       }
     })();
@@ -1629,6 +2411,34 @@ function App() {
       cancelled = true;
     };
   }, [migrationDone]);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured()) {
+      setNeeds(EMPTY_NEEDS);
+      setDonations(EMPTY_DONATIONS);
+      setDeliveries(EMPTY_DELIVERIES);
+      return;
+    }
+
+    // Check offline status periodically
+    setIsOffline(isInOfflineMode());
+    const offlineCheckInterval = setInterval(() => {
+      setIsOffline(isInOfflineMode());
+    }, 1000); // Check every second
+
+    const unsubscribeNeeds = listenToNeeds(setNeeds);
+    const unsubscribeDonations = listenToDonations(setDonations);
+    const unsubscribeDeliveries = listenToDeliveries(setDeliveries);
+    const stopEngine = startMatchingEngine();
+
+    return () => {
+      clearInterval(offlineCheckInterval);
+      unsubscribeNeeds();
+      unsubscribeDonations();
+      unsubscribeDeliveries();
+      stopEngine();
+    };
+  }, []);
 
   const startAuth = (mode: AuthMode, role: Role) => {
     setAuthMode(mode);
@@ -1671,8 +2481,8 @@ function App() {
         setPage('app');
         setDashboardView('overview');
         return;
-      } catch (err: any) {
-        setAuthNotice(err?.message || 'Authentication failed');
+      } catch (error) {
+        setAuthNotice(error instanceof Error ? error.message : 'Authentication failed');
         return;
       }
     }
@@ -1695,7 +2505,7 @@ function App() {
 
       setAccounts((current) => [...current, nextAccount]);
       setProfileCache(nextAccount.email, { name: nextAccount.name, displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole });
-      setSession({ name: nextAccount.name, email: nextAccount.email, role: nextAccount.role, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) });
+      setSession({ uid: nextAccount.email, name: nextAccount.name, email: nextAccount.email, role: nextAccount.role, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) });
       setPage('app');
       setDashboardView('overview');
       setAuthNotice('Account created successfully.');
@@ -1711,7 +2521,7 @@ function App() {
     }
 
     setProfileCache(account.email, { name: account.name, displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole });
-    setSession({ name: account.name, email: account.email, role: account.role, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) });
+    setSession({ uid: account.email, name: account.name, email: account.email, role: account.role, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) });
     setPage('app');
     setDashboardView('overview');
     setAuthNotice('Signed in successfully.');
@@ -1743,30 +2553,31 @@ function App() {
       return;
     }
 
-    try {
-      const user = await signInWithGoogle(authRole, formatUiRole(selectedUiRole));
-      const profile = await fbGetUserProfile((user as any).uid);
-      const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
-      const role = (profile?.role as Role) || authRole;
+    const user = await signInWithGoogle(authRole, formatUiRole(selectedUiRole));
+    const profile = await fbGetUserProfile(user.uid);
+    const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
+    const role = (profile?.role as Role) || authRole;
 
-      setProfileCache((user as any).uid, { name, displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole) });
-      setSession({ name, email: user.email || '', role, uiRole: selectedUiRole, displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole) });
-      setPage('app');
-      setDashboardView('overview');
-      setAuthNotice('Signed in with Google successfully.');
-      setAuthForm({ name: '', email: '', password: '' });
-    } catch (err: any) {
-      throw err;
-    }
+    setProfileCache(user.uid, { name, displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole) });
+    setSession({ uid: user.uid, name, email: user.email || '', role, uiRole: selectedUiRole, displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole) });
+    setPage('app');
+    setDashboardView('overview');
+    setAuthNotice('Signed in with Google successfully.');
+    setAuthForm({ name: '', email: '', password: '' });
   };
 
   const mobileNavItems = session ? NAV_ITEMS[session.role] : [];
   const displayRoleLabel = session ? getDisplayRoleLabel(session) : '';
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.08),_transparent_24%),linear-gradient(180deg,_#f6f9ff_0%,_#eef4fb_100%)] text-slate-900">
+    <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.08),_transparent_24%),linear-gradient(180deg,_#f6f9ff_0%,_#eef4fb_100%)] text-slate-900">
+      {isOffline && (
+        <div className="sticky top-0 z-50 w-full border-b-2 border-amber-400 bg-amber-50 px-4 py-3 text-center text-sm font-semibold text-amber-900 shadow-md sm:px-6">
+          🔌 Offline Mode: Your data is stored locally and will sync when Firestore is available.
+        </div>
+      )}
       <header className="sticky top-0 z-40 border-b border-white/80 bg-white/70 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+        <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
           <button type="button" onClick={() => setPage(session ? 'app' : 'landing')} className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-950/15">
               <Truck size={20} />
@@ -1861,7 +2672,17 @@ function App() {
           onBack={() => setPage('landing')}
         />
       )}
-      {page === 'app' && session ? <AppShell session={session} dashboardView={dashboardView} setDashboardView={setDashboardView} onLogout={handleLogout} /> : null}
+      {page === 'app' && session ? (
+        <AppShell
+          session={session}
+          dashboardView={dashboardView}
+          setDashboardView={setDashboardView}
+          onLogout={handleLogout}
+          needs={needs}
+          donations={donations}
+          deliveries={deliveries}
+        />
+      ) : null}
     </div>
   );
 }
