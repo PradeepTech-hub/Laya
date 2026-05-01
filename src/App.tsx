@@ -37,6 +37,7 @@ import {
   createNeed,
   createDonation as createDonationRecord,
   createDelivery,
+  acceptDeliveryAssignment,
   updateDonation,
   updateNeed,
   updateDelivery,
@@ -50,7 +51,7 @@ import {
 type Role = 'customer' | 'delivery-agent';
 type AuthMode = 'signin' | 'signup';
 type AppPage = 'landing' | 'auth' | 'app';
-type DashboardView = 'overview' | 'requests' | 'needs' | 'tracking' | 'profile';
+type DashboardView = 'overview' | 'requests' | 'needs' | 'tracking' | 'history' | 'profile';
 
 type Account = {
   name: string;
@@ -186,7 +187,8 @@ const NAV_ITEMS: Record<Role, { key: DashboardView; label: string; icon: ReactNo
   'delivery-agent': [
     { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={16} /> },
     { key: 'requests', label: 'My Assignments', icon: <ClipboardList size={16} /> },
-    { key: 'tracking', label: 'Routes', icon: <Route size={16} /> },
+    { key: 'tracking', label: 'Active Delivery', icon: <Route size={16} /> },
+    { key: 'history', label: 'History', icon: <CheckCircle2 size={16} /> },
     { key: 'profile', label: 'Profile', icon: <UserRound size={16} /> },
   ],
 };
@@ -365,6 +367,15 @@ function calculateDistanceKm(a: Coordinates | null, b: Coordinates | null) {
 
 function generateOtp() {
   return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function openGoogleMapsRoute(destination: Coordinates) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const url = `https://www.google.com/maps/dir/?api=1&destination=${destination.lat},${destination.lng}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function sortNeedsForDonation(openNeeds: NeedRecord[], donorLocation: Coordinates | null) {
@@ -1041,7 +1052,8 @@ function AppShell({ session, dashboardView, setDashboardView, onLogout, needs, d
         {dashboard === 'overview' && <OverviewPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
         {dashboard === 'requests' && <RequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
         {dashboard === 'needs' && session.uiRole !== 'volunteer' && <NeedsPanel session={session} needs={needs} />}
-        {dashboard === 'tracking' && <TrackingPanel session={session} donations={donations} deliveries={deliveries} />}
+        {dashboard === 'tracking' && (session.uiRole === 'volunteer' ? <VolunteerActiveDeliveryPanel session={session} deliveries={deliveries} /> : <TrackingPanel session={session} donations={donations} deliveries={deliveries} />)}
+        {dashboard === 'history' && session.uiRole === 'volunteer' ? <VolunteerHistoryPanel session={session} deliveries={deliveries} /> : null}
         {dashboard === 'profile' && <ProfilePanel session={session} onLogout={onLogout} />}
       </main>
     </div>
@@ -1053,6 +1065,45 @@ function OverviewPanel({ session, needs, donations, deliveries }: { session: Ses
   const displayRoleLabel = getDisplayRoleLabel(session);
   const openNeeds = needs.filter((need) => need.status === 'open').length;
   const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
+
+  if (session.uiRole === 'volunteer') {
+    const myActiveDeliveries = deliveries.filter((delivery) => delivery.agentId === session.uid && delivery.status !== 'delivered');
+    const completedToday = deliveries.filter((delivery) => {
+      if (delivery.agentId !== session.uid || delivery.status !== 'delivered') return false;
+      const deliveredAt = new Date(delivery.deliveredAt || delivery.createdAt);
+      const today = new Date();
+      return deliveredAt.toDateString() === today.toDateString();
+    }).length;
+    const pendingPickups = deliveries.filter((delivery) => delivery.agentId == null && delivery.status === 'pending').length;
+
+    return (
+      <div className="space-y-6">
+        <div className="rounded-[2rem] border border-white/80 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 p-6 text-white shadow-[0_30px_90px_rgba(15,23,42,0.2)] sm:p-8">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Welcome back</p>
+              <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Your delivery queue is ready</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
+                Accept assignments, move deliveries forward, and keep pickup-to-drop execution synchronized in real time.
+              </p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm text-cyan-100">
+              <Sparkles size={16} />
+              {displayRoleLabel}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-3">
+          <MetricCard icon={<Truck size={22} className="text-cyan-600" />} value={String(myActiveDeliveries.length)} label="Active Deliveries" accent="bg-cyan-50" />
+          <MetricCard icon={<CheckCircle2 size={22} className="text-emerald-600" />} value={String(completedToday)} label="Completed Today" accent="bg-emerald-50" />
+          <MetricCard icon={<ClipboardList size={22} className="text-amber-600" />} value={String(pendingPickups)} label="Pending Pickups" accent="bg-amber-50" />
+        </div>
+
+        <VolunteerActiveDeliveryPanel session={session} deliveries={deliveries} compact />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -1844,6 +1895,7 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
           lat: position.coords.latitude,
           lng: position.coords.longitude,
           address: 'Live agent location',
+          updatedAt: Date.now(),
         };
 
         liveAssignmentIdsRef.current.forEach((deliveryId) => {
@@ -1873,7 +1925,7 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
           return;
         }
 
-        await updateDelivery(delivery.id, { status: 'delivered', agentId: currentUserId });
+        await updateDelivery(delivery.id, { status: 'delivered', agentId: currentUserId, deliveredAt: Date.now() });
         await updateDonation(delivery.donationId, { status: 'completed' });
         await updateNeed(delivery.needId, { status: 'fulfilled' });
         setNotice('Delivery completed and synced across donor and NGO dashboards.');
@@ -1893,7 +1945,7 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
 
   return (
     <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="My Assignments" title="Delivery execution queue" text="Volunteer sees only actionable deliveries and updates pickup, transit, and completion in real time." />
+      <SectionTitle eyebrow="My Assignments" title="Delivery execution queue" text="Accept available deliveries, move them through pickup and transit, and complete them with real-time sync." />
       {notice ? <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div> : null}
 
       <div className="mt-6 space-y-4">
@@ -1931,45 +1983,186 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
                 </div>
 
                 <div className="flex shrink-0 flex-col gap-2 lg:w-[260px]">
-                  {delivery.status === 'pending' ? (
-                    <button type="button" onClick={() => updateStatus(delivery, 'accepted')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+                  {delivery.agentId == null ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await acceptDeliveryAssignment(delivery.id, currentUserId);
+                          openGoogleMapsRoute({ lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng });
+                          setNotice('Delivery accepted and assigned to you.');
+                        } catch (error) {
+                          setNotice(error instanceof Error ? error.message : 'Unable to accept delivery.');
+                        }
+                      }}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                    >
                       Accept Delivery
                     </button>
                   ) : null}
 
-                  {delivery.status === 'accepted' ? (
-                    <button type="button" onClick={() => updateStatus(delivery, 'picked')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
-                      Picked Up
-                    </button>
-                  ) : null}
+                  {delivery.agentId === currentUserId ? (
+                    <>
+                      {delivery.status === 'accepted' ? (
+                        <button type="button" onClick={() => updateStatus(delivery, 'picked')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
+                          Mark Picked Up
+                        </button>
+                      ) : null}
 
-                  {delivery.status === 'picked' ? (
-                    <button type="button" onClick={() => updateStatus(delivery, 'in_transit')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
-                      In Transit
-                    </button>
-                  ) : null}
+                      {delivery.status === 'picked' ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            openGoogleMapsRoute({ lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng });
+                            void updateStatus(delivery, 'in_transit');
+                          }}
+                          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Mark In Transit
+                        </button>
+                      ) : null}
 
-                  {delivery.status === 'in_transit' ? (
-                    <div className="space-y-2">
-                      <input
-                        type="text"
-                        value={otpInputs[delivery.id] || ''}
-                        onChange={(event) => setOtpInputs((current) => ({ ...current, [delivery.id]: event.target.value }))}
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                        placeholder="Enter OTP"
-                      />
-                      <button type="button" onClick={() => updateStatus(delivery, 'delivered')} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
-                        Deliver (Enter OTP)
-                      </button>
-                    </div>
+                      {delivery.status === 'in_transit' ? (
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={otpInputs[delivery.id] || ''}
+                            onChange={(event) => setOtpInputs((current) => ({ ...current, [delivery.id]: event.target.value }))}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                            placeholder="Enter OTP"
+                          />
+                          <button type="button" onClick={() => updateStatus(delivery, 'delivered')} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
+                            Mark Delivered
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
                   ) : null}
                 </div>
               </div>
-
-              <ShipmentCard delivery={delivery} />
             </div>
           );
         }) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No assignments are available right now.</div>}
+      </div>
+    </div>
+  );
+}
+
+function VolunteerActiveDeliveryPanel({ session, deliveries, compact = false }: { session: Session; deliveries: DeliveryRecord[]; compact?: boolean }) {
+  const currentUserId = session.uid || session.email;
+  const activeDelivery = deliveries
+    .filter((delivery) => delivery.agentId === currentUserId && delivery.status !== 'delivered')
+    .sort((left, right) => right.createdAt - left.createdAt)[0];
+
+  if (!activeDelivery) {
+    return (
+      <div className={`${compact ? '' : 'w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]'}`}>
+        {!compact ? <SectionTitle eyebrow="Active Delivery" title="Current delivery" text="Track the one delivery you are actively working on." /> : null}
+        <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No active delivery is assigned to you yet.</div>
+      </div>
+    );
+  }
+
+  const currentPoint = activeDelivery.agentLocation || activeDelivery.pickupLocation;
+  const distanceKm = calculateDistanceKm(
+    currentPoint ? { lat: currentPoint.lat, lng: currentPoint.lng } : null,
+    { lat: activeDelivery.dropLocation.lat, lng: activeDelivery.dropLocation.lng }
+  );
+  const stepIndex = DELIVERY_STATUS_STEPS.indexOf(activeDelivery.status as DeliveryStatus);
+  const stepLabel = stepIndex >= 0 ? DELIVERY_STATUS_STEPS[stepIndex] : activeDelivery.status;
+
+  return (
+    <div className={`${compact ? '' : 'w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]'}`}>
+      {!compact ? <SectionTitle eyebrow="Active Delivery" title="Current delivery" text="Track the delivery you are currently handling from pickup to drop-off." /> : null}
+
+      <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Assigned delivery</p>
+            <p className="mt-1 text-lg font-semibold text-slate-900">{activeDelivery.foodType || 'Food delivery'}</p>
+            <p className="mt-1 text-sm text-slate-600">Pickup: {activeDelivery.pickupLocation.address}</p>
+            <p className="mt-1 text-sm text-slate-600">Drop: {activeDelivery.dropLocation.address}</p>
+          </div>
+          <span className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-700">
+            {stepLabel.replace('_', ' ').toUpperCase()}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
+          <div className="rounded-2xl bg-white p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Quantity</p>
+            <p className="mt-1 font-semibold text-slate-900">{activeDelivery.quantity || 'Not set'}</p>
+          </div>
+          <div className="rounded-2xl bg-white p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Distance</p>
+            <p className="mt-1 font-semibold text-slate-900">{Number.isFinite(distanceKm) ? `${distanceKm.toFixed(1)} km` : '—'}</p>
+          </div>
+          <div className="rounded-2xl bg-white p-3">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Current status</p>
+            <p className="mt-1 font-semibold text-slate-900">{activeDelivery.status.replace('_', ' ')}</p>
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <BikeTracker delivery={activeDelivery} />
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-4">
+          {DELIVERY_STATUS_STEPS.map((step) => {
+            const index = DELIVERY_STATUS_STEPS.indexOf(step);
+            const active = index <= stepIndex;
+            return (
+              <div key={step} className={`rounded-2xl border px-3 py-2 text-center text-xs font-semibold ${active ? 'border-cyan-200 bg-cyan-50 text-cyan-700' : 'border-slate-200 bg-white text-slate-400'}`}>
+                {step.replace('_', ' ')}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VolunteerHistoryPanel({ session, deliveries }: { session: Session; deliveries: DeliveryRecord[] }) {
+  const currentUserId = session.uid || session.email;
+  const completedDeliveries = deliveries
+    .filter((delivery) => delivery.agentId === currentUserId && delivery.status === 'delivered')
+    .sort((left, right) => right.createdAt - left.createdAt);
+
+  return (
+    <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+      <SectionTitle eyebrow="History" title="Completed deliveries" text="A simple log of completed deliveries with the food delivered, date, and completion status." />
+
+      <div className="mt-6 space-y-4">
+        {completedDeliveries.length > 0 ? completedDeliveries.map((delivery) => (
+          <div key={delivery.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">Completed</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{delivery.foodType || 'Food delivery'}</p>
+                <p className="mt-1 text-sm text-slate-600">Date: {new Date(delivery.deliveredAt || delivery.createdAt).toLocaleString()}</p>
+                <p className="mt-1 text-sm text-slate-600">Pickup: {delivery.pickupLocation.address}</p>
+                <p className="mt-1 text-sm text-slate-600">Drop: {delivery.dropLocation.address}</p>
+              </div>
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">Completed</span>
+            </div>
+
+            <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
+              <div className="rounded-2xl bg-white p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Food delivered</p>
+                <p className="mt-1 font-semibold text-slate-900">{delivery.quantity || 'Not set'}</p>
+              </div>
+              <div className="rounded-2xl bg-white p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Distance</p>
+                <p className="mt-1 font-semibold text-slate-900">{calculateDistanceKm({ lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng }, { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng }).toFixed(1)} km</p>
+              </div>
+              <div className="rounded-2xl bg-white p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Status</p>
+                <p className="mt-1 font-semibold text-slate-900">completed</p>
+              </div>
+            </div>
+          </div>
+        )) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No completed deliveries yet.</div>}
       </div>
     </div>
   );
@@ -2158,6 +2351,17 @@ function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
     delivered: { label: 'Delivered', tone: 'bg-emerald-100 text-emerald-700' },
   };
 
+  const agentLocation = delivery.agentLocation || null;
+  const targetLocation = delivery.status === 'picked' || delivery.status === 'in_transit' ? delivery.dropLocation : delivery.pickupLocation;
+  const liveDistanceKm = agentLocation ? calculateDistanceKm({ lat: agentLocation.lat, lng: agentLocation.lng }, { lat: targetLocation.lat, lng: targetLocation.lng }) : null;
+  const trackingMessage = agentLocation
+    ? delivery.status === 'picked' || delivery.status === 'in_transit'
+      ? '🚴 Delivery agent is en route to drop-off'
+      : '🚴 Delivery agent is on the way to pickup'
+    : delivery.agentId
+      ? 'Agent assigned, waiting for live location'
+      : 'Waiting for agent assignment';
+
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2182,6 +2386,18 @@ function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
           <MapPin size={14} className="shrink-0 text-cyan-600" />
           <span className="truncate">Need: {delivery.dropLocation.address}</span>
         </div>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-cyan-100 bg-cyan-50 px-4 py-3 text-sm text-cyan-800">
+        <p className="font-semibold">{trackingMessage}</p>
+        {agentLocation ? (
+          <p className="mt-1 text-xs text-cyan-700">
+            {Number.isFinite(liveDistanceKm || Number.NaN)
+              ? `${liveDistanceKm!.toFixed(1)} km from ${delivery.status === 'picked' || delivery.status === 'in_transit' ? 'drop location' : 'pickup'}`
+              : 'Live location updated'}
+            {agentLocation.updatedAt ? ` • updated ${new Date(agentLocation.updatedAt).toLocaleTimeString()}` : ''}
+          </p>
+        ) : null}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-sm text-slate-500">

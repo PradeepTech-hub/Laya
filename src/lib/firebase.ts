@@ -40,6 +40,7 @@ type NeedLocation = {
   lat: number;
   lng: number;
   address: string;
+  updatedAt?: number;
 };
 
 type NeedRecord = {
@@ -88,6 +89,7 @@ type DeliveryRecord = {
   category?: 'prepared-food' | 'raw-food' | 'packed-food' | 'any';
   quantity?: string;
   status: 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered';
+  deliveredAt?: number;
   otp: string;
   createdAt: number;
 };
@@ -171,7 +173,7 @@ function init() {
   try {
     initializeApp(firebaseConfig as Record<string, string>);
     auth = getAuth();
-  } catch (err) {
+  } catch {
     // initialization failed; leave auth/db null
   }
 }
@@ -1046,6 +1048,65 @@ export async function updateDelivery(id: string, patch: Partial<Omit<DeliveryRec
       switchToLocalStore();
       updateLocal();
       return;
+    }
+    throw error;
+  }
+}
+
+export async function acceptDeliveryAssignment(id: string, agentId: string) {
+  const acceptLocal = () => {
+    const deliveries = readLocalDeliveries().map((item) => {
+      if (item.id !== id) return item;
+
+      if (item.agentId != null && item.agentId !== agentId) {
+        throw new Error('Delivery already assigned to another agent');
+      }
+
+      return {
+        ...item,
+        agentId,
+        status: 'accepted' as DeliveryRecord['status'],
+      };
+    });
+
+    writeLocal(LOCAL_KEYS.deliveries, deliveries);
+    emitDeliveries();
+    return true;
+  };
+
+  if (!canUseRemoteFirestore()) {
+    return acceptLocal();
+  }
+
+  try {
+    const firestore = getFirestoreDbOrThrow();
+    const deliveryRef = doc(firestore, 'deliveries', id);
+
+    await runTransaction(firestore, async (tx) => {
+      const snap = await tx.get(deliveryRef);
+      if (!snap.exists()) {
+        throw new Error('Delivery not found');
+      }
+
+      const delivery = snap.data() as Omit<DeliveryRecord, 'id'>;
+
+      if (delivery.agentId != null && delivery.agentId !== agentId) {
+        throw new Error('Delivery already assigned to another agent');
+      }
+
+      if (delivery.status !== 'pending' && delivery.status !== 'accepted') {
+        throw new Error('Delivery is no longer available');
+      }
+
+      tx.update(deliveryRef, { agentId, status: 'accepted' } as DocumentData);
+    });
+
+    return acceptLocal();
+  } catch (error) {
+    console.warn('[LAYA] acceptDeliveryAssignment failed, falling back to local:', error);
+    if (isFirestoreUnavailableError(error)) {
+      switchToLocalStore();
+      return acceptLocal();
     }
     throw error;
   }
