@@ -20,6 +20,9 @@ import {
   Sparkles,
   Truck,
   UserRound,
+  Search,
+  Zap,
+  Box,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import {
@@ -1035,73 +1038,143 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
 
 function AppShell({ session, dashboardView, setDashboardView, onLogout, needs, donations, deliveries }: AppShellProps) {
   const navItems = UI_NAV_ITEMS[session.uiRole];
-  const meta = ROLE_META[session.role];
-  const displayRoleLabel = getDisplayRoleLabel(session);
   const dashboard = session.uiRole === 'volunteer' && dashboardView === 'needs' ? 'requests' : dashboardView;
 
   return (
-    <div className="w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/85 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-950/20">
-              <Truck size={20} />
+    <div className="min-h-screen w-full bg-[#FAFAFA] text-slate-900 pb-12 font-sans relative">
+      <style>{`
+        @keyframes liquidProgress {
+          0% { background-position: 100% 0; }
+          100% { background-position: -100% 0; }
+        }
+        @keyframes slowFloat {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-10px); }
+        }
+        @keyframes fadeInSlideUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-slide {
+          animation: fadeInSlideUp 0.6s ease-out forwards;
+        }
+        .animate-slow-float {
+          animation: slowFloat 8s ease-in-out infinite;
+        }
+        .animate-liquid {
+          background-size: 200% 100%;
+          animation: liquidProgress 3s linear infinite;
+        }
+        .donor-glass-card {
+          background: rgba(255, 255, 255, 0.4);
+          backdrop-filter: blur(30px);
+          -webkit-backdrop-filter: blur(30px);
+          border: 1px solid rgba(255, 255, 255, 0.8);
+          box-shadow: 0 10px 40px rgba(0,0,0,0.03);
+          border-radius: 32px;
+        }
+        .donor-glass-panel {
+          background: rgba(255, 255, 255, 0.6);
+          backdrop-filter: blur(40px);
+          -webkit-backdrop-filter: blur(40px);
+          border: 1px solid rgba(255, 255, 255, 0.5);
+          box-shadow: 0 20px 50px rgba(0,0,0,0.04);
+          border-radius: 36px;
+        }
+        .donor-glass-btn {
+          background: rgba(255, 255, 255, 0.5);
+          backdrop-filter: blur(20px);
+          -webkit-backdrop-filter: blur(20px);
+          border: 1px solid rgba(255, 255, 255, 0.6);
+          transition: all 0.3s ease;
+        }
+        .donor-glass-btn:hover {
+          background: rgba(255, 255, 255, 0.8);
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0,0,0,0.05);
+        }
+      `}</style>
+      
+      {/* Dynamic Background */}
+      {session.uiRole === 'donor' && (
+        <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden bg-gradient-to-br from-[#FDFBF7] via-[#F3D1C2]/30 to-[#7FAFE0]/20">
+          <div className="absolute top-[-10%] right-[-5%] w-[600px] h-[600px] rounded-full bg-[#EADFD7] opacity-40 blur-[120px]"></div>
+          <div className="absolute bottom-[-10%] left-[-10%] w-[500px] h-[500px] rounded-full bg-[#5D8FCB] opacity-20 blur-[140px]"></div>
+        </div>
+      )}
+
+      <div className="relative z-10 w-full px-4 pt-6 sm:px-8">
+        {/* TOP HEADER (The Floating Island) */}
+        <header className="mx-auto max-w-7xl flex items-center justify-between rounded-[32px] border border-white/60 bg-white/40 p-3 pr-4 shadow-[0_8px_32px_rgba(0,0,0,0.04)] backdrop-blur-[30px]">
+          <div className="flex items-center gap-3 pl-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-800 text-white shadow-md">
+              <Truck size={18} />
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-600">Laya</p>
-              <p className="text-lg font-bold tracking-tight text-slate-900">{displayRoleLabel}</p>
-              <p className="text-sm text-slate-500">Delivering Surplus Food Before It Expires</p>
+              <p className="text-sm font-black tracking-widest text-slate-800 uppercase">Laya</p>
+              <p className="text-[10px] font-medium tracking-wide text-slate-500 uppercase">Delivering Surplus Food</p>
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-semibold ${meta.accent}`}>
-              <UserRound size={14} />
-              {session.name}
-            </span>
-            <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-medium text-slate-600">
-              {displayRoleLabel}
-            </span>
+          
+          <div className="flex items-center gap-3">
+            {/* Primary CTA */}
+            {session.uiRole === 'donor' && (
+              <button 
+                onClick={() => setDashboardView('requests')}
+                className="flex items-center gap-1.5 rounded-full bg-gradient-to-b from-[#D4AF37]/90 to-[#CD7F32] px-4 py-2 text-xs font-bold text-white shadow-[0_4px_12px_rgba(205,127,50,0.3)] transition hover:scale-105"
+              >
+                <Plus size={14} /> Donate Food
+              </button>
+            )}
+            {/* Sign Out */}
             <button
               type="button"
               onClick={onLogout}
-              className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              className="flex items-center gap-1.5 rounded-full border border-white/50 bg-white/40 px-3 py-1.5 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-white hover:text-rose-500"
             >
-              <LogOut size={16} />
-              Sign out
+              <LogOut size={13} /> Sign out
             </button>
           </div>
-        </div>
+        </header>
 
-        <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+        {/* Navigation Tabs (Glass Pills) */}
+        <div className="mx-auto mt-6 max-w-7xl flex gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {navItems.map((item) => (
             <button
               key={item.key}
               type="button"
               onClick={() => setDashboardView(item.key)}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${dashboard === item.key ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              className={`flex shrink-0 items-center gap-2 rounded-[20px] px-5 py-2.5 text-xs font-bold transition-all ${
+                dashboard === item.key 
+                  ? 'bg-slate-800 text-white shadow-md scale-105' 
+                  : 'donor-glass-btn text-slate-600 hover:bg-white/60'
+              }`}
             >
               {item.icon}
               {item.label}
             </button>
           ))}
         </div>
-      </div>
 
-      <main className="mt-6">
-        {dashboard === 'overview' && <OverviewPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
-        {dashboard === 'requests' && <RequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
-        {dashboard === 'needs' && session.uiRole !== 'volunteer' && <NeedsPanel session={session} needs={needs} />}
-        {dashboard === 'tracking' && (session.uiRole === 'volunteer' ? <VolunteerActiveDeliveryPanel session={session} deliveries={deliveries} /> : <TrackingPanel session={session} donations={donations} deliveries={deliveries} />)}
-        {dashboard === 'history' && session.uiRole === 'volunteer' ? <VolunteerHistoryPanel session={session} deliveries={deliveries} /> : null}
-        {dashboard === 'profile' && <ProfilePanel session={session} onLogout={onLogout} />}
-      </main>
+        <main className="mx-auto mt-8 max-w-7xl">
+          {dashboard === 'overview' && <OverviewPanel session={session} needs={needs} donations={donations} deliveries={deliveries} setDashboardView={setDashboardView} />}
+          {dashboard === 'requests' && <RequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
+          {dashboard === 'needs' && session.uiRole !== 'volunteer' && <NeedsPanel session={session} needs={needs} />}
+          {dashboard === 'tracking' && (session.uiRole === 'volunteer' ? <VolunteerActiveDeliveryPanel session={session} deliveries={deliveries} /> : <TrackingPanel session={session} donations={donations} deliveries={deliveries} />)}
+          {dashboard === 'history' && session.uiRole === 'volunteer' ? <VolunteerHistoryPanel session={session} deliveries={deliveries} /> : null}
+          {dashboard === 'profile' && <ProfilePanel session={session} onLogout={onLogout} />}
+        </main>
+      </div>
     </div>
   );
 }
 
-function OverviewPanel({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
-  const metrics = session.uiRole === 'donor' ? CUSTOMER_METRICS : session.uiRole === 'ngo' ? NGO_METRICS : AGENT_METRICS;
+function OverviewPanel({ session, needs, donations, deliveries, setDashboardView }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[]; setDashboardView: (v: DashboardView) => void }) {
+  if (session.uiRole === 'donor') {
+    return <CustomerOverview session={session} needs={needs} donations={donations} deliveries={deliveries} setDashboardView={setDashboardView} />;
+  }
+
+  const metrics = session.uiRole === 'ngo' ? NGO_METRICS : AGENT_METRICS;
   const displayRoleLabel = getDisplayRoleLabel(session);
   const openNeeds = needs.filter((need) => need.status === 'open').length;
   const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
@@ -1176,15 +1249,7 @@ function OverviewPanel({ session, needs, donations, deliveries }: { session: Ses
         <MetricCard icon={<Truck size={22} className="text-emerald-600" />} value={String(activeDeliveries)} label="Active Deliveries" accent="bg-emerald-50" />
       </div>
 
-      {/* Impact card for donors */}
-      {/** show a simple impact summary card */}
-      <div className="mt-4">
-        <div className="w-full rounded-2xl border border-white/80 bg-white/90 p-4 shadow-sm">
-          <p className="text-lg font-semibold text-slate-900">🌍 You helped feed 120 people this week</p>
-        </div>
-      </div>
-
-      {session.uiRole === 'donor' ? <CustomerOverview session={session} needs={needs} donations={donations} deliveries={deliveries} /> : session.uiRole === 'ngo' ? <NgoOverview session={session} needs={needs} deliveries={deliveries} /> : <AgentOverview session={session} deliveries={deliveries} />}
+      {session.uiRole === 'ngo' ? <NgoOverview session={session} needs={needs} deliveries={deliveries} /> : <AgentOverview session={session} deliveries={deliveries} />}
     </div>
   );
 }
@@ -1227,36 +1292,233 @@ function NgoOverview({ session, needs, deliveries }: { session: Session; needs: 
   );
 }
 
-function CustomerOverview({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
-  const donorDeliveries = deliveries.filter((delivery) => delivery.donorId === session.email);
-  const donorDonations = donations.filter((donation) => donation.donorId === session.email);
-  const bestNeeds = sortNeedsForDonation(needs.filter((need) => need.status === 'open'), null).slice(0, 3);
+function CustomerOverview({ session, needs, donations, deliveries, setDashboardView }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[]; setDashboardView: (v: DashboardView) => void }) {
+  const donorDonations = donations.filter((d) => d.donorId === session.email);
+  const donorDeliveries = deliveries.filter((d) => d.donorId === session.email);
+  const completedDeliveries = donorDeliveries.filter((d) => d.status === 'delivered');
+  const totalMeals = donorDonations.reduce((sum, d) => sum + (d.servings || 0), 0);
+  const peopleServed = completedDeliveries.reduce((sum, d) => sum + (d.servings || 1), 0);
+  const goalMeals = Math.max(200, totalMeals + 50);
+  const progressPct = goalMeals > 0 ? Math.min(100, Math.round((totalMeals / goalMeals) * 100)) : 0;
+
+  // Build last-7-days chart data from real donations
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const label = d.toLocaleDateString('en-IN', { weekday: 'short' });
+    const count = donorDonations.filter((don) => {
+      const created = new Date(don.createdAt || '');
+      return created.toDateString() === d.toDateString();
+    }).reduce((s, don) => s + (don.servings || 1), 0);
+    return { label, count };
+  });
+  const maxCount = Math.max(...last7.map((p) => p.count), 1);
+  const toY = (v: number) => 100 - Math.round((v / maxCount) * 90);
+  const pathD = last7.map((p, i) => {
+    const x = (i / 6) * 360 + 20;
+    const y = toY(p.count);
+    return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
+  }).join(' ');
+  const areaD = pathD + ` L 380 120 L 20 120 Z`;
 
   return (
-    <div className="grid w-full gap-6 xl:grid-cols-2">
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Donation Flow" title="Match surplus food to the closest open need" text="Donors submit food details, and the app selects the best beneficiary need by urgency, distance, and time." />
-
-        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-2">
-          <MetricCard icon={<MapPin size={22} className="text-cyan-600" />} value={String(bestNeeds.length)} label="Best Matches" accent="bg-cyan-50" />
-          <MetricCard icon={<Truck size={22} className="text-emerald-600" />} value={String(donorDonations.length)} label="My Donations" accent="bg-emerald-50" />
-        </div>
-
-        <div className="mt-6 space-y-3">
-          {bestNeeds.length > 0 ? (
-            bestNeeds.map((need) => <NeedCard key={need.id} need={need} />)
-          ) : (
-            <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No open needs are available right now.</div>
-          )}
+    <div className="flex flex-col gap-8 pb-12 animate-fade-slide">
+      {/* 2. HERO SECTION */}
+      <div className="donor-glass-panel relative overflow-hidden px-8 py-12">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">
+              Hi {session.name.split(' ')[0]} 👋<br/>
+              Ready to make an impact today?
+            </h1>
+            <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/60 px-4 py-2 text-xs font-bold text-slate-700 shadow-sm backdrop-blur-md border border-white/40">
+              💡 Donating early increases delivery success by 60%
+            </div>
+          </div>
+          
+          <div className="flex flex-col sm:flex-row gap-4">
+            <button onClick={() => setDashboardView('requests')} className="flex items-center justify-center gap-2 rounded-[24px] bg-[#FDB1C9]/30 border border-[#FDB1C9]/50 backdrop-blur-md px-8 py-5 text-sm font-bold text-[#b13560] shadow-[0_8px_24px_rgba(253,177,201,0.2)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(253,177,201,0.3)] transition-all">
+              <Plus size={18} /> Add Donation
+            </button>
+            <button className="flex items-center justify-center gap-2 rounded-[24px] bg-[#7FAFE0]/30 border border-[#7FAFE0]/50 backdrop-blur-md px-8 py-5 text-sm font-bold text-[#1F548C] shadow-[0_8px_24px_rgba(127,175,224,0.1)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(127,175,224,0.2)] transition-all">
+              <Zap size={18} /> Auto-Match Food
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Recent Deliveries" title="Your latest food donations" text="Track what was matched, where it is going, and when it is completed." />
-
-        <div className="mt-6 space-y-3">
-          {donorDeliveries.length > 0 ? donorDeliveries.slice(0, 4).map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No deliveries have been created yet.</div>}
+      {/* 3. OVERVIEW (The Impact Dashboard) */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Left Card: Real Data Spline Chart */}
+        <div className="donor-glass-card relative overflow-hidden p-8 flex flex-col justify-between min-h-[300px]">
+          <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-gradient-to-br from-[#F5E6D3]/60 to-[#FDB1C9]/40 blur-[40px]"></div>
+          <div className="relative z-10 flex items-start justify-between">
+            <div>
+              <h2 className="text-xl font-black text-slate-800 tracking-tight">Meals Donated</h2>
+              <p className="text-sm font-medium text-slate-500 mt-0.5">Last 7 days · real data</p>
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-black text-slate-800">{totalMeals > 0 ? totalMeals : '–'}</p>
+              <p className="text-xs font-bold text-emerald-500 mt-0.5">total servings</p>
+            </div>
+          </div>
+          <div className="relative z-10 mt-6 h-36 w-full">
+            <svg viewBox="0 0 400 130" className="h-full w-full overflow-visible">
+              <defs>
+                <linearGradient id="areaGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#7FAFE0" stopOpacity="0.35" />
+                  <stop offset="100%" stopColor="#F3D1C2" stopOpacity="0.0" />
+                </linearGradient>
+                <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#7FAFE0" />
+                  <stop offset="100%" stopColor="#FDB1C9" />
+                </linearGradient>
+              </defs>
+              {/* Grid lines */}
+              {[25, 50, 75, 100].map((y) => (
+                <line key={y} x1="20" y1={y} x2="380" y2={y} stroke="rgba(0,0,0,0.04)" strokeWidth="1" />
+              ))}
+              <path d={areaD} fill="url(#areaGrad)" />
+              <path d={pathD} fill="none" stroke="url(#lineGrad)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              {/* Data point dots */}
+              {last7.map((p, i) => {
+                const x = (i / 6) * 360 + 20;
+                const y = toY(p.count);
+                return (
+                  <g key={i}>
+                    <circle cx={x} cy={y} r="5" fill="white" stroke="#7FAFE0" strokeWidth="2" />
+                    <text x={x} y={125} fontSize="9" textAnchor="middle" fill="#94a3b8">{p.label}</text>
+                    {p.count > 0 && <text x={x} y={y - 9} fontSize="9" textAnchor="middle" fill="#5D8FCB" fontWeight="bold">{p.count}</text>}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
         </div>
+
+        {/* Right Card: Real Metric Tiles */}
+        <div className="donor-glass-card p-8 flex flex-col justify-between">
+          <div className="grid grid-cols-2 gap-4">
+            {[
+              { label: 'My Donations', value: donorDonations.length, color: '#7FAFE0', emoji: '🍱' },
+              { label: 'People Served', value: peopleServed || completedDeliveries.length, color: '#FDB1C9', emoji: '🤝' },
+              { label: 'Deliveries Done', value: completedDeliveries.length, color: '#A8D5A2', emoji: '✅' },
+              { label: 'In Transit', value: donorDeliveries.filter((d) => d.status !== 'delivered').length, color: '#F5C97A', emoji: '🚚' },
+            ].map((m) => (
+              <div key={m.label} className="rounded-2xl p-4" style={{ background: m.color + '22', border: `1px solid ${m.color}44` }}>
+                <p className="text-2xl">{m.emoji}</p>
+                <p className="text-2xl font-black text-slate-800 mt-1">{m.value}</p>
+                <p className="text-xs font-bold text-slate-500 mt-0.5 uppercase tracking-wide">{m.label}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6">
+            <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
+              <span>🎯 Weekly Goal</span>
+              <span>{progressPct}% · {totalMeals}/{goalMeals} meals</span>
+            </div>
+            <div className="h-3 w-full rounded-full bg-white/50 border border-white/40 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[#F3D1C2] via-[#FDB1C9] to-[#7FAFE0] animate-liquid"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 5. IMPACT STRIP */}
+      <div className="donor-glass-card p-6 overflow-hidden relative">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          <p className="text-sm font-bold text-slate-700">
+            🍽️ You've donated <span className="text-slate-900">{totalMeals}</span> servings · helped <span className="text-slate-900">{peopleServed || completedDeliveries.length}</span> people. Goal: <span className="text-slate-900">{goalMeals}</span> meals.
+          </p>
+          <p className="text-sm font-black text-slate-800">{progressPct}%</p>
+        </div>
+        <div className="h-4 w-full rounded-full bg-white/40 border border-white/50 overflow-hidden p-[1px]">
+          <div className="h-full rounded-full bg-gradient-to-r from-[#F3D1C2] via-[#FDB1C9] to-[#7FAFE0] bg-[length:200%_100%] animate-liquid" style={{ width: `${progressPct}%` }}></div>
+        </div>
+      </div>
+
+      {/* 6. MAIN WORKSPACE */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Left Panel: Smart Donation Flow — with food image */}
+        <div className="donor-glass-panel overflow-hidden min-h-[320px] flex flex-col">
+          <div className="relative h-40 w-full overflow-hidden rounded-t-[36px]">
+            <img
+              src="https://images.unsplash.com/photo-1547592166-23ac45744acd?w=700&q=80"
+              alt="Fresh food ready to donate"
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-white/70 to-transparent" />
+          </div>
+          <div className="p-6 flex flex-col flex-1">
+            <h3 className="text-lg font-black text-slate-800">Smart Donation Flow</h3>
+            <p className="text-xs font-medium text-slate-500 mt-1 mb-4">AI matches your surplus food to the nearest open need automatically.</p>
+            {donorDonations.length > 0 ? (
+              <div className="space-y-2">
+                {donorDonations.slice(0, 3).map((don, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-2xl bg-white/60 px-4 py-2.5 border border-white/50">
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">{don.foodType || 'Food Item'}</p>
+                      <p className="text-xs text-slate-500">{don.servings || 1} servings</p>
+                    </div>
+                    <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                      don.status === 'matched' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                    }`}>{don.status || 'pending'}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <button
+                onClick={() => {}}
+                className="mt-auto self-start flex items-center gap-2 rounded-2xl bg-gradient-to-b from-[#D4AF37]/90 to-[#CD7F32] px-5 py-2.5 text-sm font-bold text-white shadow-md hover:scale-105 transition"
+              >
+                <Plus size={15} /> Add First Donation
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Right Panel: Recent Deliveries — with image */}
+        <div className="donor-glass-panel overflow-hidden min-h-[320px] flex flex-col">
+          <div className="relative h-40 w-full overflow-hidden rounded-t-[36px]">
+            <img
+              src="https://images.unsplash.com/photo-1593113598332-cd288d649433?w=700&q=80"
+              alt="Food delivery in progress"
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-white/70 to-transparent" />
+          </div>
+          <div className="p-6 flex flex-col flex-1">
+            <h3 className="text-lg font-black text-slate-800">Recent Deliveries</h3>
+            <p className="text-xs font-medium text-slate-500 mt-1 mb-4">Track your food from donation to beneficiary doorstep.</p>
+            {donorDeliveries.length > 0 ? (
+              <div className="space-y-2">
+                {donorDeliveries.slice(0, 3).map((del, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-2xl bg-white/60 px-4 py-2.5 border border-white/50">
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">Delivery #{del.id?.slice(-4) || i + 1}</p>
+                      <p className="text-xs text-slate-500">{del.servings || 1} servings</p>
+                    </div>
+                    <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                      del.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+                    }`}>{del.status}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm font-medium text-slate-400 mt-auto">No deliveries yet — your first donation creates one automatically.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 7. INTELLIGENT FOOTER */}
+      <div className="mt-4 flex items-center justify-center">
+        <p className="text-xs font-bold tracking-wide text-[#5D8FCB] bg-blue-50/50 backdrop-blur-md px-5 py-2.5 rounded-full border border-blue-100/50 shadow-[0_4px_20px_rgba(93,143,203,0.1)]">
+          🔥 Nearby demand detected: Whitefield (2.5 km away)
+        </p>
       </div>
     </div>
   );
@@ -1323,16 +1585,20 @@ function NeedsPanel({ session, needs }: { session: Session; needs: NeedRecord[] 
     });
 
   return (
-    <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="Live Needs" title="Beneficiary requests in real time" text="Open needs are visible to donors and delivery agents so food goes directly to the right location." />
+    <div className="donor-glass-panel p-8 animate-fade-slide">
+      <div className="mb-6">
+        <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB]">Live Needs</p>
+        <h2 className="text-2xl font-black text-slate-800 mt-1">Beneficiary requests near you</h2>
+        <p className="text-sm text-slate-500 mt-1">Open needs posted by NGOs — match your donation to the right location.</p>
+      </div>
 
-      <div className="mt-4 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 mb-6">
         <label className="block">
-          <span className="mb-2 block text-sm font-semibold text-slate-800">Filter by Meal Type</span>
+          <span className="mb-2 block text-xs font-bold text-slate-600 uppercase tracking-wide">Meal Type</span>
           <select
             value={mealTypeFilter}
             onChange={(event) => setMealTypeFilter(event.target.value as MealType)}
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            className="w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
           >
             {MEAL_TYPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -1341,11 +1607,11 @@ function NeedsPanel({ session, needs }: { session: Session; needs: NeedRecord[] 
         </label>
 
         <label className="block">
-          <span className="mb-2 block text-sm font-semibold text-slate-800">Filter by Category</span>
+          <span className="mb-2 block text-xs font-bold text-slate-600 uppercase tracking-wide">Food Category</span>
           <select
             value={categoryFilter}
             onChange={(event) => setCategoryFilter(event.target.value as FoodCategory)}
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+            className="w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
           >
             {CATEGORY_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -1354,8 +1620,15 @@ function NeedsPanel({ session, needs }: { session: Session; needs: NeedRecord[] 
         </label>
       </div>
 
-      <div className="mt-6 grid w-full grid-cols-1 gap-4 md:grid-cols-2">
-        {visibleNeeds.length > 0 ? visibleNeeds.map((need) => <NeedCard key={need.id} need={need} allowFulfill={session.uiRole === 'ngo'} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No live needs have been posted yet.</div>}
+      <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2">
+        {visibleNeeds.length > 0
+          ? visibleNeeds.map((need) => <NeedCard key={need.id} need={need} allowFulfill={session.uiRole === 'ngo'} />)
+          : (
+            <div className="col-span-2 rounded-3xl border border-white/60 bg-white/30 backdrop-blur p-8 text-center">
+              <p className="text-2xl mb-2">🌿</p>
+              <p className="text-sm font-medium text-slate-500">No live needs match your filters right now.</p>
+            </div>
+          )}
       </div>
     </div>
   );
@@ -1747,10 +2020,10 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
   };
 
   return (
-    <div className="grid w-full gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Donate Food" title="Match surplus before it expires" text="Your food will be matched based on urgency, distance, and expiry time." />
-
+    <div className="flex flex-col gap-6">
+      <div className="donor-glass-panel p-8 animate-fade-slide">
+        <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Donate Food</p>
+        <h2 className="text-2xl font-black text-slate-800 mb-6">Match surplus before it expires</h2>
         <form onSubmit={submitDonation} className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
           <SimpleInput label="Food Type" value={form.foodType} onChange={(value) => setForm({ ...form, foodType: value })} placeholder="Prepared meals, bread, groceries" />
           <label className="block">
@@ -1758,7 +2031,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
             <select
               value={form.mealType}
               onChange={(event) => setForm({ ...form, mealType: event.target.value as MealType })}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+              className="w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
             >
               {MEAL_TYPE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1770,7 +2043,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
             <select
               value={form.category}
               onChange={(event) => setForm({ ...form, category: event.target.value as FoodCategory })}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+              className="w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
             >
               {CATEGORY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1784,7 +2057,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
             <select
               value={form.expiryTime}
               onChange={(event) => setForm({ ...form, expiryTime: event.target.value as 'within-1-hour' | 'within-2-hours' | 'within-4-hours' | 'today' })}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+              className="w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
             >
               {EXPIRY_TIME_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -1800,7 +2073,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
             <textarea
               value={form.notes}
               onChange={(event) => setForm({ ...form, notes: event.target.value })}
-              className="min-h-24 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+              className="min-h-24 w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
               placeholder="Food safety notes, special handling, or donor instructions"
             />
           </label>
@@ -1830,22 +2103,26 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
             {notice ? <p className="text-sm text-slate-600">{notice}</p> : null}
           </div>
 
-          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 sm:col-span-2">
+          <button type="submit" className="flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-[#D4AF37]/90 to-[#CD7F32] px-6 py-3 text-sm font-bold text-white shadow-md hover:scale-105 transition sm:col-span-2">
             <Plus size={16} />
             Match and Deliver
           </button>
         </form>
       </div>
 
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="My Donations" title="Your donations" text="See pending donations and their match status. Cancel a pending donation anytime." />
+      <div className="donor-glass-panel p-8">
+        <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">My Donations</p>
+        <h2 className="text-xl font-black text-slate-800 mb-4">Your donations</h2>
 
-        <div className="mt-4 space-y-3">
+        <div className="space-y-3">
           {myDonations.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">You have no donations yet.</div>
+            <div className="rounded-3xl border border-white/60 bg-white/30 backdrop-blur p-8 text-center">
+              <p className="text-2xl mb-2">🍱</p>
+              <p className="text-sm font-medium text-slate-500">No donations yet — add your first above.</p>
+            </div>
           ) : (
             myDonations.map((donation) => (
-              <div key={donation.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
+              <div key={donation.id} className="rounded-2xl border border-white/50 bg-white/60 backdrop-blur px-5 py-4 text-sm">
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="font-semibold text-slate-900">{donation.foodType}</p>
@@ -2190,44 +2467,75 @@ function VolunteerHistoryPanel({ session, deliveries }: { session: Session; deli
 }
 
 function TrackingPanel({ session, donations, deliveries }: { session: Session; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
-  const accent = session.uiRole === 'donor' ? 'from-cyan-50 to-sky-50' : session.uiRole === 'ngo' ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50';
-  const latestDeliveries = deliveries.slice(0, 3);
+  const myDeliveries = session.uiRole === 'donor'
+    ? deliveries.filter((d) => d.donorId === session.email)
+    : deliveries.slice(0, 3);
   const activeDonations = donations.filter((donation) => donation.status !== 'completed').length;
 
-  return (
-    <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle
-        eyebrow="Delivery Tracking"
-        title={session.uiRole === 'donor' ? 'Monitor your deliveries' : session.uiRole === 'ngo' ? 'Follow need-based handoffs' : 'Plan your route checkpoints'}
-        text="A simple tracking layout keeps the delivery flow easy to understand without extra noise."
-      />
-
-      <div className={`mt-6 rounded-[2rem] border border-slate-200 bg-gradient-to-br ${accent} p-6`}>
-        <div className="grid w-full gap-4 xl:grid-cols-[0.95fr_1.05fr] xl:items-center">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-              <MapPin size={14} /> Route view
+  if (session.uiRole !== 'donor') {
+    // Non-donor tracking (unchanged white panel)
+    const accent = session.uiRole === 'ngo' ? 'from-emerald-50 to-teal-50' : 'from-amber-50 to-orange-50';
+    return (
+      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="Delivery Tracking" title={session.uiRole === 'ngo' ? 'Follow need-based handoffs' : 'Plan your route checkpoints'} text="A simple tracking layout keeps the delivery flow easy to understand." />
+        <div className={`mt-6 rounded-[2rem] border border-slate-200 bg-gradient-to-br ${accent} p-6`}>
+          <div className="grid w-full gap-4 xl:grid-cols-2">
+            <div>
+              <h3 className="text-2xl font-bold tracking-tight text-slate-900">{session.uiRole === 'ngo' ? 'Need location tracking' : 'Delivery route overview'}</h3>
+              <p className="mt-3 text-sm leading-6 text-slate-600">Active: {activeDonations}</p>
             </div>
-            <h3 className="mt-4 text-2xl font-bold tracking-tight text-slate-900">{session.uiRole === 'donor' ? 'Live delivery tracking' : session.uiRole === 'ngo' ? 'Need location tracking' : 'Delivery route overview'}</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-600">
-              {session.uiRole === 'donor'
-                ? 'Follow each pickup through transit and completion without leaving the dashboard.'
-                : session.uiRole === 'ngo'
-                  ? 'Track when food reaches the beneficiary location and the need is fulfilled.'
-                  : 'Check the next stop, current job status, and your progress through the route.'}
-            </p>
-            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Delivery flow: Need - Assigned - In Transit - Delivered</p>
-            <p className="mt-2 text-sm text-slate-600">Active donations: {activeDonations}</p>
-          </div>
-
-          <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
-            {latestDeliveries.length > 0 ? latestDeliveries.map((delivery) => (
-              <ShipmentCard key={delivery.id} delivery={delivery} />
-            )) : (
-              <div className="rounded-3xl border border-white/70 bg-white/85 p-4 text-sm text-slate-500">No deliveries available yet.</div>
-            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {deliveries.slice(0, 3).length > 0 ? deliveries.slice(0, 3).map((d) => <ShipmentCard key={d.id} delivery={d} />) : <div className="rounded-3xl border border-white/70 bg-white/85 p-4 text-sm text-slate-500">No deliveries yet.</div>}
+            </div>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // Donor glass tracking
+  return (
+    <div className="donor-glass-panel p-8 animate-fade-slide">
+      <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Delivery Tracking</p>
+      <h2 className="text-2xl font-black text-slate-800 mb-6">Monitor your deliveries</h2>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        {[
+          { label: 'Total', value: myDeliveries.length, color: '#7FAFE0', emoji: '📦' },
+          { label: 'In Transit', value: myDeliveries.filter((d) => d.status === 'in-transit' || d.status === 'picked-up').length, color: '#FDB1C9', emoji: '🚚' },
+          { label: 'Delivered', value: myDeliveries.filter((d) => d.status === 'delivered').length, color: '#A8D5A2', emoji: '✅' },
+          { label: 'Pending', value: myDeliveries.filter((d) => d.status === 'pending').length, color: '#F5C97A', emoji: '⏳' },
+        ].map((m) => (
+          <div key={m.label} className="rounded-2xl p-4" style={{ background: m.color + '22', border: `1px solid ${m.color}44` }}>
+            <p className="text-xl">{m.emoji}</p>
+            <p className="text-2xl font-black text-slate-800 mt-1">{m.value}</p>
+            <p className="text-xs font-bold text-slate-500 mt-0.5 uppercase tracking-wide">{m.label}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3">
+        {myDeliveries.length > 0 ? myDeliveries.map((delivery) => (
+          <div key={delivery.id} className="flex items-center justify-between rounded-2xl bg-white/60 border border-white/50 backdrop-blur px-5 py-4">
+            <div>
+              <p className="font-bold text-slate-800 text-sm">{delivery.foodType || 'Food'}</p>
+              <p className="text-xs text-slate-500 mt-0.5">📍 {delivery.dropLocation?.address || 'Destination'}</p>
+            </div>
+            <div className="text-right">
+              <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+                delivery.status === 'delivered' ? 'bg-emerald-100 text-emerald-700'
+                : delivery.status === 'in-transit' || delivery.status === 'picked-up' ? 'bg-blue-100 text-blue-700'
+                : 'bg-amber-100 text-amber-700'
+              }`}>{delivery.status}</span>
+              <p className="text-xs text-slate-400 mt-1">{delivery.quantity || ''}</p>
+            </div>
+          </div>
+        )) : (
+          <div className="rounded-3xl border border-white/60 bg-white/30 backdrop-blur p-8 text-center">
+            <p className="text-2xl mb-2">🚚</p>
+            <p className="text-sm font-medium text-slate-500">No deliveries yet. Add a donation to start tracking.</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2235,51 +2543,78 @@ function TrackingPanel({ session, donations, deliveries }: { session: Session; d
 
 function ProfilePanel({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const displayRoleLabel = getDisplayRoleLabel(session);
+  const isDonor = session.uiRole === 'donor';
+
+  if (!isDonor) {
+    return (
+      <div className="grid w-full gap-6 xl:grid-cols-[0.85fr_1.15fr]">
+        <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+          <SectionTitle eyebrow="Profile" title="Account details" text="A compact profile area keeps role information visible and easy to review." />
+          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white"><UserRound size={20} /></div>
+              <div>
+                <p className="font-semibold text-slate-900">{session.name}</p>
+                <p className="text-sm text-slate-500">{session.email}</p>
+              </div>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <ProfileField label="Role" value={displayRoleLabel} />
+              <ProfileField label="Status" value="Active" />
+            </div>
+          </div>
+        </div>
+        <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+          <SectionTitle eyebrow="Actions" title="Workspace" text="" />
+          <button type="button" onClick={onLogout} className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="grid w-full gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Profile" title="Account details" text="A compact profile area keeps role information visible and easy to review." />
+    <div className="donor-glass-panel p-8 animate-fade-slide">
+      <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Profile</p>
+      <h2 className="text-2xl font-black text-slate-800 mb-6">Your Account</h2>
 
-        <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white">
-              <UserRound size={20} />
-            </div>
-            <div>
-              <p className="font-semibold text-slate-900">{session.name}</p>
-              <p className="text-sm text-slate-500">{session.email}</p>
-            </div>
+      <div className="flex flex-col md:flex-row gap-6">
+        {/* Avatar card */}
+        <div className="donor-glass-card p-6 flex flex-col items-center text-center min-w-[200px]">
+          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F3D1C2] to-[#7FAFE0] flex items-center justify-center text-white text-3xl font-black shadow-lg mb-3">
+            {session.name.charAt(0).toUpperCase()}
           </div>
+          <p className="font-black text-slate-800 text-lg">{session.name}</p>
+          <p className="text-xs text-slate-500 mt-0.5">{session.email}</p>
+          <span className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-[#7FAFE0]/20 border border-[#7FAFE0]/40 px-3 py-1 text-xs font-bold text-[#1F548C]">
+            🍱 {displayRoleLabel}
+          </span>
+        </div>
 
-            <div className="mt-5 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
-            <ProfileField label="Role" value={displayRoleLabel} />
-            <ProfileField label="Status" value="Active" />
-            <ProfileField label="Donor" value={session.uiRole === 'ngo' ? 'NGO coordination desk' : displayRoleLabel} />
-            <ProfileField label="Access" value="Protected" />
-            <ProfileField label="Total Donations" value="24" />
-            <ProfileField label="Meals Contributed" value="12.5K" />
-          </div>
+        {/* Stats grid */}
+        <div className="flex-1 grid grid-cols-2 gap-4">
+          {[
+            { label: 'Account Status', value: 'Active ✅', color: '#A8D5A2' },
+            { label: 'Access Level', value: 'Protected 🔒', color: '#7FAFE0' },
+            { label: 'Role', value: displayRoleLabel, color: '#FDB1C9' },
+            { label: 'Member Since', value: new Date().getFullYear().toString(), color: '#F5C97A' },
+          ].map((f) => (
+            <div key={f.label} className="rounded-2xl p-4" style={{ background: f.color + '22', border: `1px solid ${f.color}44` }}>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">{f.label}</p>
+              <p className="font-black text-slate-800">{f.value}</p>
+            </div>
+          ))}
         </div>
       </div>
 
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Actions" title="Keep the workspace ready" text="Use the sign-out action below or continue working in the donation dashboard." />
-
-        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
-          <ActionCard icon={<BarChart3 size={18} />} title="Usage summary" text="Track activity from the overview panel." />
-          <ActionCard icon={<Building2 size={18} />} title="Company settings" text="Keep brand and access details in one place." />
-          <ActionCard icon={<Route size={18} />} title="Routing" text="Use live route checkpoints for delivery progress." />
-          <ActionCard icon={<ShieldCheck size={18} />} title="Security" text="Protected routing keeps the right views visible." />
-        </div>
-
+      <div className="mt-6 flex flex-wrap gap-3">
         <button
           type="button"
           onClick={onLogout}
-          className="mt-6 inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+          className="flex items-center gap-2 rounded-2xl bg-gradient-to-b from-rose-400 to-rose-500 px-5 py-2.5 text-sm font-bold text-white shadow-md hover:scale-105 transition"
         >
-          <LogOut size={16} />
-          Sign out
+          <LogOut size={15} /> Sign out
         </button>
       </div>
     </div>
@@ -2289,14 +2624,14 @@ function ProfilePanel({ session, onLogout }: { session: Session; onLogout: () =>
 function SimpleInput({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-sm font-semibold text-slate-800">{label}</span>
+      <span className="mb-2 block text-xs font-bold text-slate-600 uppercase tracking-wide">{label}</span>
       <input
         type="text"
         required
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+        className="w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#7FAFE0] focus:bg-white/80 focus:ring-4 focus:ring-[#7FAFE0]/20"
       />
     </label>
   );
@@ -2312,7 +2647,7 @@ function NeedCard({ need, allowFulfill = false, onFulfill }: { need: NeedRecord;
   const requiredTime = Number.isFinite(need.requiredBefore) ? new Date(need.requiredBefore).toLocaleString() : 'ASAP';
 
   return (
-    <div className="w-full rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
+    <div className="w-full rounded-3xl border border-white/60 bg-white/50 backdrop-blur p-5 shadow-sm transition hover:bg-white/70 hover:shadow-md">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2 text-sm text-slate-500">
@@ -2821,7 +3156,7 @@ function App() {
           🔌 Offline Mode: Your data is stored locally and will sync when Firestore is available.
         </div>
       )}
-      {page !== 'landing' && (
+      {page === 'auth' && (
         <header className="sticky top-0 z-40 border-b border-white/80 bg-white/70 backdrop-blur">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
           <button type="button" onClick={() => setPage(session ? 'app' : 'landing')} className="flex items-center gap-3">
