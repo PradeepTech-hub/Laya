@@ -1292,7 +1292,205 @@ function NgoOverview({ session, needs, deliveries }: { session: Session; needs: 
   );
 }
 
+// ── Auto-Match Modal ────────────────────────────────────────────────────────
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function computeMatchScore(need: NeedRecord, donorLat?: number, donorLng?: number, expiryMs?: number): number {
+  let score = 0;
+  // Urgency (0–30 pts)
+  score += need.urgency === 'high' ? 30 : need.urgency === 'medium' ? 20 : 10;
+  // Time decay (0–25 pts)
+  if (expiryMs) {
+    const h = (expiryMs - Date.now()) / 3_600_000;
+    score += h < 1 ? 25 : h < 2 ? 20 : h < 4 ? 15 : 10;
+  } else { score += 15; }
+  // Distance (0–25 pts)
+  if (donorLat && donorLng && need.location.lat && need.location.lng) {
+    const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng);
+    score += d < 2 ? 25 : d < 5 ? 20 : d < 10 ? 15 : d < 20 ? 10 : 5;
+  } else { score += 15; }
+  // Capacity (0–20 pts)
+  const p = parseInt(String(need.peopleCount)) || 0;
+  score += p > 100 ? 20 : p > 50 ? 15 : p > 20 ? 10 : 5;
+  return Math.min(100, score);
+}
+
+type MatchResult = { need: NeedRecord; score: number; distKm: number | null };
+
+function AutoMatchModal({ needs, session, onClose, onConfirm }: {
+  needs: NeedRecord[];
+  session: Session;
+  onClose: () => void;
+  onConfirm: (need: NeedRecord) => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [matches, setMatches] = useState<MatchResult[]>([]);
+  const [confirmed, setConfirmed] = useState(false);
+  const [donorPos, setDonorPos] = useState<{ lat: number; lng: number } | null>(null);
+
+  const openNeeds = needs.filter((n) => n.status === 'open');
+  const openNeedsRef = useRef(openNeeds);
+  openNeedsRef.current = openNeeds;
+
+  useEffect(() => {
+    navigator.geolocation?.getCurrentPosition(
+      (pos) => setDonorPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {}
+    );
+  }, []);
+
+  useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    timers.push(setTimeout(() => setStep(1), 900));
+    timers.push(setTimeout(() => setStep(2), 1900));
+    timers.push(setTimeout(() => setStep(3), 3200));
+    timers.push(setTimeout(() => {
+      const currentNeeds = openNeedsRef.current;
+      const scored: MatchResult[] = currentNeeds.map((n) => ({
+        need: n,
+        score: computeMatchScore(n, donorPos?.lat, donorPos?.lng),
+        distKm: donorPos ? haversineKm(donorPos.lat, donorPos.lng, n.location.lat || 0, n.location.lng || 0) : null,
+      })).sort((a, b) => b.score - a.score).slice(0, 4);
+      setMatches(scored);
+      setStep(4);
+    }, 3200));
+    return () => timers.forEach(clearTimeout);
+  }, []); // run once on mount
+
+  const best = matches.length > 0 ? matches[0] : null;
+
+  const STEPS = [
+    { icon: '🍱', label: 'Scanning your food supply…', color: '#FDB1C9' },
+    { icon: '🧭', label: 'Scanning nearby demand points…', color: '#7FAFE0' },
+    { icon: '🤖', label: 'Computing AI match scores…', color: '#A8D5A2' },
+    { icon: '📊', label: 'Ranking beneficiary NGOs…', color: '#F5C97A' },
+    { icon: '✅', label: 'Best match found!', color: '#A8D5A2' },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(12px)' }}>
+      <div className="relative w-full max-w-2xl rounded-[36px] overflow-hidden shadow-[0_40px_100px_rgba(0,0,0,0.25)]" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(243,209,194,0.85) 50%, rgba(127,175,224,0.85) 100%)' }}>
+        {/* Close */}
+        <button onClick={onClose} className="absolute top-5 right-5 z-10 w-8 h-8 rounded-full bg-white/60 backdrop-blur flex items-center justify-center text-slate-500 hover:text-rose-500 hover:bg-white transition">
+          <X size={16} />
+        </button>
+
+        <div className="p-8">
+          {/* Header */}
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FDB1C9] to-[#7FAFE0] flex items-center justify-center text-2xl shadow-lg">⚡</div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB]">Laya Intelligence</p>
+              <h2 className="text-xl font-black text-slate-800">Auto-Match Food</h2>
+            </div>
+          </div>
+
+          {/* Steps */}
+          <div className="space-y-3 mb-8">
+            {STEPS.map((s, i) => (
+              <div key={i} className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition-all duration-500 ${
+                step > i ? 'bg-white/70 border border-white/60 shadow-sm' :
+                step === i ? 'bg-white/50 border border-white/40 animate-pulse' :
+                'opacity-30'
+              }`}>
+                <span className="text-xl">{s.icon}</span>
+                <span className="text-sm font-bold text-slate-700 flex-1">{s.label}</span>
+                {step > i && <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">✓ Done</span>}
+                {step === i && <span className="text-xs font-bold text-[#5D8FCB] bg-blue-50 px-2 py-1 rounded-full animate-pulse">Running…</span>}
+              </div>
+            ))}
+          </div>
+
+          {/* Match Results */}
+          {step >= 4 && (
+            <div className="animate-fade-slide">
+              {matches.length === 0 ? (
+                <div className="rounded-3xl border border-white/60 bg-white/40 p-6 text-center">
+                  <p className="text-3xl mb-2">🌿</p>
+                  <p className="font-bold text-slate-700">No open needs right now</p>
+                  <p className="text-sm text-slate-500 mt-1">Add your food donation — we'll auto-match when NGOs post requests.</p>
+                  <button onClick={() => onClose()} className="mt-4 flex items-center gap-2 mx-auto rounded-2xl bg-gradient-to-b from-[#D4AF37]/90 to-[#CD7F32] px-5 py-2.5 text-sm font-bold text-white shadow-md hover:scale-105 transition">
+                    <Plus size={14}/> Add Donation Instead
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-3">🏆 Top Matches Ranked by AI Score</p>
+                  <div className="space-y-3 mb-6">
+                    {matches.map((m, i) => (
+                      <div key={m.need.id} className={`rounded-2xl p-4 border transition-all ${
+                        i === 0 ? 'bg-white/80 border-[#A8D5A2]/60 shadow-md' : 'bg-white/50 border-white/40'
+                      }`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              {i === 0 && <span className="text-xs font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">👑 Best Match</span>}
+                              <span className="text-xs font-bold text-slate-500 uppercase">{m.need.urgency} urgency</span>
+                            </div>
+                            <p className="font-black text-slate-800 mt-1">{m.need.foodType || 'Food needed'}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">📍 {m.need.location.address} · 👥 {m.need.peopleCount} people</p>
+                            {m.distKm !== null && <p className="text-xs text-[#5D8FCB] font-bold mt-0.5">📏 {m.distKm.toFixed(1)} km away</p>}
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-2xl font-black" style={{ color: m.score >= 80 ? '#16a34a' : m.score >= 60 ? '#d97706' : '#dc2626' }}>{m.score}%</p>
+                            <p className="text-xs text-slate-400 font-bold">match score</p>
+                          </div>
+                        </div>
+                        {/* Score bar */}
+                        <div className="mt-3 h-2 w-full rounded-full bg-white/50 overflow-hidden">
+                          <div className="h-full rounded-full transition-all duration-1000" style={{
+                            width: `${m.score}%`,
+                            background: m.score >= 80 ? 'linear-gradient(90deg,#A8D5A2,#22c55e)' : m.score >= 60 ? 'linear-gradient(90deg,#F5C97A,#f59e0b)' : 'linear-gradient(90deg,#FDB1C9,#ef4444)'
+                          }} />
+                        </div>
+                        {/* Score breakdown */}
+                        <div className="mt-2 flex gap-3 text-xs text-slate-500">
+                          <span>⏱️ {m.need.urgency === 'high' ? 'High' : 'Med'} urgency</span>
+                          <span>👥 {m.need.peopleCount} served</span>
+                          {m.distKm !== null && <span>📍 {m.distKm < 5 ? 'Near' : 'Reachable'}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {!confirmed ? (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => { if (!best) return; setConfirmed(true); setTimeout(() => onConfirm(best.need), 1500); }}
+                        className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-6 py-3.5 text-sm font-black text-white shadow-lg hover:scale-105 transition"
+                      >
+                        <Zap size={16} /> Confirm Match {best ? `with ${best.need.location.address.split(',')[0]}` : ''}
+                      </button>
+                      <button onClick={onClose} className="px-5 py-3.5 rounded-2xl border border-white/60 bg-white/40 text-sm font-bold text-slate-600 hover:bg-white transition">
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-5 text-center animate-fade-slide">
+                      <p className="text-3xl mb-2">🚀</p>
+                      <p className="font-black text-emerald-700 text-lg">Auto-routing in progress…</p>
+                      <p className="text-sm text-emerald-600 mt-1">Assigning delivery agent · Generating fastest route · Sending notifications</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CustomerOverview({ session, needs, donations, deliveries, setDashboardView }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[]; setDashboardView: (v: DashboardView) => void }) {
+  const [showAutoMatch, setShowAutoMatch] = useState(false);
+
   const donorDonations = donations.filter((d) => d.donorId === session.email);
   const donorDeliveries = deliveries.filter((d) => d.donorId === session.email);
   const completedDeliveries = donorDeliveries.filter((d) => d.status === 'delivered');
@@ -1323,6 +1521,18 @@ function CustomerOverview({ session, needs, donations, deliveries, setDashboardV
 
   return (
     <div className="flex flex-col gap-8 pb-12 animate-fade-slide">
+      {/* Auto-Match Modal */}
+      {showAutoMatch && (
+        <AutoMatchModal
+          needs={needs}
+          session={session}
+          onClose={() => setShowAutoMatch(false)}
+          onConfirm={(need) => {
+            setShowAutoMatch(false);
+            setDashboardView('requests');
+          }}
+        />
+      )}
       {/* 2. HERO SECTION */}
       <div className="donor-glass-panel relative overflow-hidden px-8 py-12">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
@@ -1340,7 +1550,7 @@ function CustomerOverview({ session, needs, donations, deliveries, setDashboardV
             <button onClick={() => setDashboardView('requests')} className="flex items-center justify-center gap-2 rounded-[24px] bg-[#FDB1C9]/30 border border-[#FDB1C9]/50 backdrop-blur-md px-8 py-5 text-sm font-bold text-[#b13560] shadow-[0_8px_24px_rgba(253,177,201,0.2)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(253,177,201,0.3)] transition-all">
               <Plus size={18} /> Add Donation
             </button>
-            <button className="flex items-center justify-center gap-2 rounded-[24px] bg-[#7FAFE0]/30 border border-[#7FAFE0]/50 backdrop-blur-md px-8 py-5 text-sm font-bold text-[#1F548C] shadow-[0_8px_24px_rgba(127,175,224,0.1)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(127,175,224,0.2)] transition-all">
+            <button onClick={() => setShowAutoMatch(true)} className="flex items-center justify-center gap-2 rounded-[24px] bg-[#7FAFE0]/30 border border-[#7FAFE0]/50 backdrop-blur-md px-8 py-5 text-sm font-bold text-[#1F548C] shadow-[0_8px_24px_rgba(127,175,224,0.1)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(127,175,224,0.2)] transition-all">
               <Zap size={18} /> Auto-Match Food
             </button>
           </div>
