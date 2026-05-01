@@ -1347,42 +1347,47 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function computeMatchScore(need: NeedRecord, donorLat?: number, donorLng?: number, expiryMs?: number): number {
-  let score = 0;
-  // Urgency (0–30 pts)
-  score += need.urgency === 'high' ? 30 : need.urgency === 'medium' ? 20 : 10;
-  // Time decay (0–25 pts)
-  if (expiryMs) {
-    const h = (expiryMs - Date.now()) / 3_600_000;
-    score += h < 1 ? 25 : h < 2 ? 20 : h < 4 ? 15 : 10;
-  } else { score += 15; }
-  // Distance (0–25 pts)
-  if (donorLat && donorLng && need.location.lat && need.location.lng) {
-    const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng);
-    score += d < 2 ? 25 : d < 5 ? 20 : d < 10 ? 15 : d < 20 ? 10 : 5;
-  } else { score += 15; }
-  // Capacity (0–20 pts)
-  const p = parseInt(String(need.peopleCount)) || 0;
-  score += p > 100 ? 20 : p > 50 ? 15 : p > 20 ? 10 : 5;
-  return Math.min(100, score);
+interface MatchScoreBreakdown { urgency: number; timeDecay: number; distance: number; capacity: number; foodCompat: number; feasibility: number; total: number; }
+
+function computeFullMatchScore(need: NeedRecord, donorLat?: number, donorLng?: number, expiryMs?: number, donorMealType?: string, donorCategory?: string, donorServings?: number): MatchScoreBreakdown {
+  const b: MatchScoreBreakdown = { urgency: 0, timeDecay: 0, distance: 0, capacity: 0, foodCompat: 0, feasibility: 0, total: 0 };
+  b.urgency = need.urgency === 'high' ? 20 : need.urgency === 'medium' ? 12 : 5;
+  if (expiryMs) { const h = (expiryMs - Date.now()) / 3_600_000; b.timeDecay = h < 0 ? 0 : h < 1 ? 20 : h < 2 ? 16 : h < 4 ? 10 : 5; } else { b.timeDecay = 8; }
+  if (donorLat && donorLng && need.location.lat && need.location.lng) { const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng); b.distance = d < 2 ? 20 : d < 5 ? 16 : d < 10 ? 12 : d < 15 ? 8 : d < 25 ? 4 : 1; } else { b.distance = 10; }
+  const ppl = parseInt(String(need.peopleCount)) || 0; const serv = donorServings || 0;
+  if (serv > 0 && ppl > 0) { const ratio = serv / ppl; b.capacity = ratio >= 1 ? 15 : ratio >= 0.5 ? 10 : 5; } else { b.capacity = ppl > 100 ? 15 : ppl > 50 ? 10 : ppl > 20 ? 7 : 4; }
+  const nM = (need.mealType || 'any').toLowerCase(); const dM = (donorMealType || 'any').toLowerCase();
+  const nC = (need.category || 'any').toLowerCase(); const dC = (donorCategory || 'any').toLowerCase();
+  let compat = 0; if (dM === 'any' || nM === 'any' || dM === nM) compat += 8; else compat += 2;
+  if (dC === 'any' || nC === 'any' || dC === nC) compat += 7; else compat += 1; b.foodCompat = compat;
+  if (donorLat && donorLng && need.location.lat && need.location.lng) { const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng); const hLeft = expiryMs ? (expiryMs - Date.now()) / 3_600_000 : 4; b.feasibility = (d / 30 < hLeft) ? (d < 5 ? 10 : d < 15 ? 7 : 4) : 0; } else { b.feasibility = 5; }
+  b.total = Math.min(100, b.urgency + b.timeDecay + b.distance + b.capacity + b.foodCompat + b.feasibility);
+  return b;
 }
 
-type MatchResult = { need: NeedRecord; score: number; distKm: number | null };
+type MatchResult = { need: NeedRecord; score: number; breakdown: MatchScoreBreakdown; distKm: number | null };
+type AutoMatchPhase = 'form' | 'scanning' | 'results' | 'routing' | 'done';
 
-function AutoMatchModal({ needs, session, onClose, onConfirm }: {
+function AutoMatchModal({ needs, donations, session, onClose, onMatchComplete }: {
   needs: NeedRecord[];
+  donations: DonationRecord[];
   session: Session;
   onClose: () => void;
-  onConfirm: (need: NeedRecord) => void;
+  onMatchComplete: () => void;
 }) {
-  const [step, setStep] = useState(0);
+  const [phase, setPhase] = useState<AutoMatchPhase>('form');
+  const [scanStep, setScanStep] = useState(0);
   const [matches, setMatches] = useState<MatchResult[]>([]);
-  const [confirmed, setConfirmed] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [routeStatus, setRouteStatus] = useState('');
+  const [error, setError] = useState('');
+  const [foodType, setFoodType] = useState('');
+  const [mealType, setMealType] = useState('any');
+  const [category, setCategory] = useState('any');
+  const [quantity, setQuantity] = useState('');
+  const [expiryTime, setExpiryTime] = useState('within-2-hours');
+  const [pickupLocation, setPickupLocation] = useState('');
   const [donorPos, setDonorPos] = useState<{ lat: number; lng: number } | null>(null);
-
-  const openNeeds = needs.filter((n) => n.status === 'open');
-  const openNeedsRef = useRef(openNeeds);
-  openNeedsRef.current = openNeeds;
 
   useEffect(() => {
     navigator.geolocation?.getCurrentPosition(
@@ -1391,141 +1396,198 @@ function AutoMatchModal({ needs, session, onClose, onConfirm }: {
     );
   }, []);
 
-  useEffect(() => {
+  const getExpiryMs = (): number => {
+    const now = Date.now();
+    if (expiryTime === 'within-1-hour') return now + 3_600_000;
+    if (expiryTime === 'within-2-hours') return now + 7_200_000;
+    if (expiryTime === 'within-4-hours') return now + 14_400_000;
+    return now + 28_800_000;
+  };
+
+  const startMatching = () => {
+    if (!foodType.trim() || !quantity.trim()) { setError('Please fill food type and quantity.'); return; }
+    setError('');
+    setPhase('scanning');
+    setScanStep(0);
+    const expMs = getExpiryMs();
+    const openNeeds = needs.filter((n) => n.status === 'open');
     const timers: ReturnType<typeof setTimeout>[] = [];
-    timers.push(setTimeout(() => setStep(1), 900));
-    timers.push(setTimeout(() => setStep(2), 1900));
-    timers.push(setTimeout(() => setStep(3), 3200));
+    timers.push(setTimeout(() => setScanStep(1), 800));
+    timers.push(setTimeout(() => setScanStep(2), 1800));
+    timers.push(setTimeout(() => setScanStep(3), 2800));
+    timers.push(setTimeout(() => setScanStep(4), 3800));
     timers.push(setTimeout(() => {
-      const currentNeeds = openNeedsRef.current;
-      const scored: MatchResult[] = currentNeeds.map((n) => ({
-        need: n,
-        score: computeMatchScore(n, donorPos?.lat, donorPos?.lng),
-        distKm: donorPos ? haversineKm(donorPos.lat, donorPos.lng, n.location.lat || 0, n.location.lng || 0) : null,
-      })).sort((a, b) => b.score - a.score).slice(0, 4);
+      const scored: MatchResult[] = openNeeds.map((n) => {
+        const bd = computeFullMatchScore(n, donorPos?.lat, donorPos?.lng, expMs, mealType, category, parseInt(quantity) || 0);
+        return { need: n, score: bd.total, breakdown: bd, distKm: donorPos && n.location.lat && n.location.lng ? haversineKm(donorPos.lat, donorPos.lng, n.location.lat, n.location.lng) : null };
+      }).filter((m) => m.breakdown.feasibility > 0 || !donorPos).sort((a, b) => b.score - a.score).slice(0, 5);
       setMatches(scored);
-      setStep(4);
-    }, 3200));
-    return () => timers.forEach(clearTimeout);
-  }, []); // run once on mount
+      setScanStep(5);
+      setPhase('results');
+    }, 4800));
+  };
 
-  const best = matches.length > 0 ? matches[0] : null;
+  const confirmMatch = async (matchIdx: number) => {
+    const m = matches[matchIdx];
+    if (!m) return;
+    setSelectedIdx(matchIdx);
+    setPhase('routing');
+    try {
+      setRouteStatus('Registering food donation...');
+      const donationId = await createDonationRecord({
+        donorId: session.email, foodType, mealType: mealType as MealType, category: category as FoodCategory,
+        quantity, expiryTime: getExpiryMs(),
+        location: { address: pickupLocation || 'Auto-detected', lat: donorPos?.lat ?? 0, lng: donorPos?.lng ?? 0 },
+        status: 'assigned', assignedNeedId: m.need.id,
+      });
+      setRouteStatus('Assigning delivery agent & route...');
+      await new Promise((r) => setTimeout(r, 800));
+      await createDelivery({
+        donorId: session.email, donorName: session.name, ngoId: m.need.ngoId, agentId: null, donationId,
+        pickupLocation: { address: pickupLocation || 'Auto-detected', lat: donorPos?.lat ?? 0, lng: donorPos?.lng ?? 0 },
+        dropLocation: m.need.location, needId: m.need.id, agentLocation: null,
+        foodType, mealType: mealType as MealType, category: category as FoodCategory, quantity, status: 'pending',
+      });
+      setRouteStatus('Updating need status...');
+      await updateNeed(m.need.id, { status: 'assigned' });
+      setRouteStatus('Match confirmed!');
+      await new Promise((r) => setTimeout(r, 600));
+      setPhase('done');
+    } catch (err) {
+      setError(`Match failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setPhase('results');
+      if (matchIdx + 1 < matches.length) setSelectedIdx(matchIdx + 1);
+    }
+  };
 
-  const STEPS = [
-    { icon: '🍱', label: 'Scanning your food supply…', color: '#FDB1C9' },
-    { icon: '🧭', label: 'Scanning nearby demand points…', color: '#7FAFE0' },
-    { icon: '🤖', label: 'Computing AI match scores…', color: '#A8D5A2' },
-    { icon: '📊', label: 'Ranking beneficiary NGOs…', color: '#F5C97A' },
-    { icon: '✅', label: 'Best match found!', color: '#A8D5A2' },
+  const SCAN_STEPS = [
+    { icon: '\uD83C\uDF71', label: 'Registering your food supply' },
+    { icon: '\uD83E\uDDED', label: 'Scanning NGOs within 15km radius' },
+    { icon: '\uD83E\uDD16', label: 'Computing AI match scores' },
+    { icon: '\uD83D\uDCCA', label: 'Ranking beneficiary NGOs by score' },
+    { icon: '\uD83D\uDE9A', label: 'Checking delivery feasibility' },
+    { icon: '\u2705', label: `Found ${matches.length} match${matches.length !== 1 ? 'es' : ''}!` },
   ];
+  const glassInput = "w-full rounded-2xl border border-white/60 bg-white/50 backdrop-blur px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:ring-4 focus:ring-[#7FAFE0]/20";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(12px)' }}>
-      <div className="relative w-full max-w-2xl rounded-[36px] overflow-hidden shadow-[0_40px_100px_rgba(0,0,0,0.25)]" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(243,209,194,0.85) 50%, rgba(127,175,224,0.85) 100%)' }}>
-        {/* Close */}
-        <button onClick={onClose} className="absolute top-5 right-5 z-10 w-8 h-8 rounded-full bg-white/60 backdrop-blur flex items-center justify-center text-slate-500 hover:text-rose-500 hover:bg-white transition">
-          <X size={16} />
-        </button>
-
+      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[36px] shadow-[0_40px_100px_rgba(0,0,0,0.25)]" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(243,209,194,0.85) 50%, rgba(127,175,224,0.85) 100%)' }}>
+        <button onClick={onClose} className="absolute top-5 right-5 z-10 w-8 h-8 rounded-full bg-white/60 backdrop-blur flex items-center justify-center text-slate-500 hover:text-rose-500 hover:bg-white transition"><X size={16} /></button>
         <div className="p-8">
-          {/* Header */}
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FDB1C9] to-[#7FAFE0] flex items-center justify-center text-2xl shadow-lg">⚡</div>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FDB1C9] to-[#7FAFE0] flex items-center justify-center text-2xl shadow-lg">{'\u26A1'}</div>
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB]">Laya Intelligence</p>
               <h2 className="text-xl font-black text-slate-800">Auto-Match Food</h2>
             </div>
           </div>
 
-          {/* Steps */}
-          <div className="space-y-3 mb-8">
-            {STEPS.map((s, i) => (
-              <div key={i} className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition-all duration-500 ${
-                step > i ? 'bg-white/70 border border-white/60 shadow-sm' :
-                step === i ? 'bg-white/50 border border-white/40 animate-pulse' :
-                'opacity-30'
-              }`}>
-                <span className="text-xl">{s.icon}</span>
-                <span className="text-sm font-bold text-slate-700 flex-1">{s.label}</span>
-                {step > i && <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">✓ Done</span>}
-                {step === i && <span className="text-xs font-bold text-[#5D8FCB] bg-blue-50 px-2 py-1 rounded-full animate-pulse">Running…</span>}
+          {phase === 'form' && (
+            <div className="animate-fade-slide space-y-4">
+              <p className="text-sm text-slate-600">Enter what you are donating. Our AI will find the best-matched NGO instantly.</p>
+              {error && <p className="text-sm text-rose-600 font-bold">{error}</p>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Food Type *</label><input value={foodType} onChange={(e) => setFoodType(e.target.value)} placeholder="e.g. Prepared meals, bread" className={glassInput} /></div>
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Quantity (servings) *</label><input value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 50" type="number" className={glassInput} /></div>
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Meal Type</label><select value={mealType} onChange={(e) => setMealType(e.target.value)} className={glassInput}><option value="any">Any</option><option value="veg">Veg</option><option value="non-veg">Non-Veg</option><option value="vegan">Vegan</option></select></div>
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Category</label><select value={category} onChange={(e) => setCategory(e.target.value)} className={glassInput}><option value="any">Any</option><option value="cooked">Cooked</option><option value="raw">Raw</option><option value="packaged">Packaged</option><option value="beverages">Beverages</option></select></div>
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Expires In</label><select value={expiryTime} onChange={(e) => setExpiryTime(e.target.value)} className={glassInput}><option value="within-1-hour">Within 1 hour</option><option value="within-2-hours">Within 2 hours</option><option value="within-4-hours">Within 4 hours</option><option value="today">Today</option></select></div>
+                <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Pickup Location</label><input value={pickupLocation} onChange={(e) => setPickupLocation(e.target.value)} placeholder="Address (or auto-detect GPS)" className={glassInput} /></div>
               </div>
-            ))}
-          </div>
+              <button onClick={startMatching} className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-[#7FAFE0] to-[#5D8FCB] px-6 py-4 text-sm font-black text-white shadow-lg hover:scale-[1.02] transition mt-2"><Zap size={18} /> Find Best Match Now</button>
+            </div>
+          )}
 
-          {/* Match Results */}
-          {step >= 4 && (
+          {phase === 'scanning' && (
+            <div className="space-y-3 animate-fade-slide">
+              <p className="text-sm text-slate-600 mb-4"><strong>{foodType}</strong> - {quantity} servings - expires {expiryTime.replace('within-', '').replace('-', ' ')}</p>
+              {SCAN_STEPS.map((s, i) => (
+                <div key={i} className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition-all duration-500 ${scanStep > i ? 'bg-white/70 border border-white/60 shadow-sm' : scanStep === i ? 'bg-white/50 border border-white/40 animate-pulse' : 'opacity-30'}`}>
+                  <span className="text-xl">{s.icon}</span>
+                  <span className="text-sm font-bold text-slate-700 flex-1">{s.label}</span>
+                  {scanStep > i && <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">Done</span>}
+                  {scanStep === i && <span className="text-xs font-bold text-[#5D8FCB] bg-blue-50 px-2 py-1 rounded-full animate-pulse">Running</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {phase === 'results' && (
             <div className="animate-fade-slide">
+              {error && <p className="text-sm text-amber-600 font-bold mb-3">{error} Re-allocating to next best match.</p>}
               {matches.length === 0 ? (
-                <div className="rounded-3xl border border-white/60 bg-white/40 p-6 text-center">
-                  <p className="text-3xl mb-2">🌿</p>
-                  <p className="font-bold text-slate-700">No open needs right now</p>
-                  <p className="text-sm text-slate-500 mt-1">Add your food donation — we'll auto-match when NGOs post requests.</p>
-                  <button onClick={() => onClose()} className="mt-4 flex items-center gap-2 mx-auto rounded-2xl bg-gradient-to-b from-[#D4AF37]/90 to-[#CD7F32] px-5 py-2.5 text-sm font-bold text-white shadow-md hover:scale-105 transition">
-                    <Plus size={14}/> Add Donation Instead
-                  </button>
+                <div className="rounded-3xl border border-white/60 bg-white/40 p-8 text-center">
+                  <p className="text-3xl mb-2">{'\uD83C\uDF3F'}</p>
+                  <p className="font-bold text-slate-700">No matching NGOs found right now</p>
+                  <p className="text-sm text-slate-500 mt-1">Your donation will be saved. We will auto-match when an NGO posts a need.</p>
+                  <button onClick={onClose} className="mt-4 rounded-2xl bg-gradient-to-b from-[#D4AF37]/90 to-[#CD7F32] px-5 py-2.5 text-sm font-bold text-white shadow-md hover:scale-105 transition">Got it</button>
                 </div>
               ) : (
                 <>
-                  <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-3">🏆 Top Matches Ranked by AI Score</p>
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Top {matches.length} Matches - Ranked by AI</p>
+                  <p className="text-xs text-slate-500 mb-4">Score = Urgency + Time Decay + Distance + Capacity + Food Compatibility + Delivery Feasibility</p>
                   <div className="space-y-3 mb-6">
                     {matches.map((m, i) => (
-                      <div key={m.need.id} className={`rounded-2xl p-4 border transition-all ${
-                        i === 0 ? 'bg-white/80 border-[#A8D5A2]/60 shadow-md' : 'bg-white/50 border-white/40'
-                      }`}>
+                      <div key={m.need.id} className={`rounded-2xl p-4 border cursor-pointer transition-all hover:shadow-md ${i === selectedIdx ? 'bg-white/80 border-[#A8D5A2]/60 shadow-md ring-2 ring-emerald-300' : 'bg-white/50 border-white/40'}`} onClick={() => setSelectedIdx(i)}>
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              {i === 0 && <span className="text-xs font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">👑 Best Match</span>}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {i === 0 && <span className="text-xs font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Best Match</span>}
                               <span className="text-xs font-bold text-slate-500 uppercase">{m.need.urgency} urgency</span>
                             </div>
                             <p className="font-black text-slate-800 mt-1">{m.need.foodType || 'Food needed'}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">📍 {m.need.location.address} · 👥 {m.need.peopleCount} people</p>
-                            {m.distKm !== null && <p className="text-xs text-[#5D8FCB] font-bold mt-0.5">📏 {m.distKm.toFixed(1)} km away</p>}
+                            <p className="text-xs text-slate-500 mt-0.5">{m.need.location.address} - {m.need.peopleCount} people</p>
+                            {m.distKm !== null && <p className="text-xs text-[#5D8FCB] font-bold mt-0.5">{m.distKm.toFixed(1)} km away</p>}
                           </div>
                           <div className="text-right shrink-0">
-                            <p className="text-2xl font-black" style={{ color: m.score >= 80 ? '#16a34a' : m.score >= 60 ? '#d97706' : '#dc2626' }}>{m.score}%</p>
-                            <p className="text-xs text-slate-400 font-bold">match score</p>
+                            <p className="text-2xl font-black" style={{ color: m.score >= 75 ? '#16a34a' : m.score >= 50 ? '#d97706' : '#dc2626' }}>{m.score}%</p>
+                            <p className="text-xs text-slate-400 font-bold">score</p>
                           </div>
                         </div>
-                        {/* Score bar */}
-                        <div className="mt-3 h-2 w-full rounded-full bg-white/50 overflow-hidden">
-                          <div className="h-full rounded-full transition-all duration-1000" style={{
-                            width: `${m.score}%`,
-                            background: m.score >= 80 ? 'linear-gradient(90deg,#A8D5A2,#22c55e)' : m.score >= 60 ? 'linear-gradient(90deg,#F5C97A,#f59e0b)' : 'linear-gradient(90deg,#FDB1C9,#ef4444)'
-                          }} />
+                        <div className="mt-2 h-2 w-full rounded-full bg-white/50 overflow-hidden">
+                          <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${m.score}%`, background: m.score >= 75 ? 'linear-gradient(90deg,#A8D5A2,#22c55e)' : m.score >= 50 ? 'linear-gradient(90deg,#F5C97A,#f59e0b)' : 'linear-gradient(90deg,#FDB1C9,#ef4444)' }} />
                         </div>
-                        {/* Score breakdown */}
-                        <div className="mt-2 flex gap-3 text-xs text-slate-500">
-                          <span>⏱️ {m.need.urgency === 'high' ? 'High' : 'Med'} urgency</span>
-                          <span>👥 {m.need.peopleCount} served</span>
-                          {m.distKm !== null && <span>📍 {m.distKm < 5 ? 'Near' : 'Reachable'}</span>}
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold text-slate-500">
+                          <span className="bg-white/60 px-2 py-0.5 rounded-full">Urgency {m.breakdown.urgency}/20</span>
+                          <span className="bg-white/60 px-2 py-0.5 rounded-full">Decay {m.breakdown.timeDecay}/20</span>
+                          <span className="bg-white/60 px-2 py-0.5 rounded-full">Dist {m.breakdown.distance}/20</span>
+                          <span className="bg-white/60 px-2 py-0.5 rounded-full">Cap {m.breakdown.capacity}/15</span>
+                          <span className="bg-white/60 px-2 py-0.5 rounded-full">Food {m.breakdown.foodCompat}/15</span>
+                          <span className="bg-white/60 px-2 py-0.5 rounded-full">Route {m.breakdown.feasibility}/10</span>
                         </div>
                       </div>
                     ))}
                   </div>
-
-                  {!confirmed ? (
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => { if (!best) return; setConfirmed(true); setTimeout(() => onConfirm(best.need), 1500); }}
-                        className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-6 py-3.5 text-sm font-black text-white shadow-lg hover:scale-105 transition"
-                      >
-                        <Zap size={16} /> Confirm Match {best ? `with ${best.need.location.address.split(',')[0]}` : ''}
-                      </button>
-                      <button onClick={onClose} className="px-5 py-3.5 rounded-2xl border border-white/60 bg-white/40 text-sm font-bold text-slate-600 hover:bg-white transition">
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-5 text-center animate-fade-slide">
-                      <p className="text-3xl mb-2">🚀</p>
-                      <p className="font-black text-emerald-700 text-lg">Auto-routing in progress…</p>
-                      <p className="text-sm text-emerald-600 mt-1">Assigning delivery agent · Generating fastest route · Sending notifications</p>
-                    </div>
-                  )}
+                  <div className="flex gap-3">
+                    <button onClick={() => confirmMatch(selectedIdx)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-6 py-3.5 text-sm font-black text-white shadow-lg hover:scale-105 transition"><Zap size={16} /> Confirm Match #{selectedIdx + 1}</button>
+                    <button onClick={onClose} className="px-5 py-3.5 rounded-2xl border border-white/60 bg-white/40 text-sm font-bold text-slate-600 hover:bg-white transition">Cancel</button>
+                  </div>
                 </>
               )}
+            </div>
+          )}
+
+          {phase === 'routing' && (
+            <div className="animate-fade-slide text-center py-8">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-3xl bg-gradient-to-br from-emerald-100 to-blue-100 flex items-center justify-center text-3xl animate-pulse">{'\uD83D\uDE80'}</div>
+              <p className="font-black text-slate-800 text-lg">{routeStatus}</p>
+              <p className="text-sm text-slate-500 mt-2">Creating donation - Assigning agent - Generating fastest route</p>
+              <div className="mt-4 h-2 w-48 mx-auto rounded-full bg-white/50 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-blue-400 animate-pulse" style={{ width: '60%' }} /></div>
+            </div>
+          )}
+
+          {phase === 'done' && (
+            <div className="animate-fade-slide text-center py-8">
+              <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-emerald-100 flex items-center justify-center text-4xl">{'\u2705'}</div>
+              <h3 className="text-2xl font-black text-emerald-700">Match Confirmed!</h3>
+              <p className="text-sm text-slate-600 mt-2">Your <strong>{foodType}</strong> ({quantity} servings) is matched to <strong>{matches[selectedIdx]?.need.location.address}</strong></p>
+              <div className="mt-4 grid grid-cols-3 gap-2 max-w-xs mx-auto text-xs">
+                <div className="bg-white/60 rounded-xl p-2"><p className="font-black text-emerald-600">{matches[selectedIdx]?.score}%</p><p className="text-slate-500">Score</p></div>
+                <div className="bg-white/60 rounded-xl p-2"><p className="font-black text-blue-600">{matches[selectedIdx]?.distKm?.toFixed(1) || '?'} km</p><p className="text-slate-500">Distance</p></div>
+                <div className="bg-white/60 rounded-xl p-2"><p className="font-black text-amber-600">{matches[selectedIdx]?.need.peopleCount}</p><p className="text-slate-500">People</p></div>
+              </div>
+              <button onClick={() => { onMatchComplete(); onClose(); }} className="mt-6 rounded-2xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-8 py-3 text-sm font-black text-white shadow-lg hover:scale-105 transition">View Delivery Tracking</button>
             </div>
           )}
         </div>
@@ -1533,6 +1595,7 @@ function AutoMatchModal({ needs, session, onClose, onConfirm }: {
     </div>
   );
 }
+
 
 function CustomerOverview({ session, needs, donations, deliveries, setDashboardView }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[]; setDashboardView: (v: DashboardView) => void }) {
   const [showAutoMatch, setShowAutoMatch] = useState(false);
@@ -1571,11 +1634,12 @@ function CustomerOverview({ session, needs, donations, deliveries, setDashboardV
       {showAutoMatch && (
         <AutoMatchModal
           needs={needs}
+          donations={donations}
           session={session}
           onClose={() => setShowAutoMatch(false)}
-          onConfirm={(need) => {
+          onMatchComplete={() => {
             setShowAutoMatch(false);
-            setDashboardView('requests');
+            setDashboardView('tracking');
           }}
         />
       )}
