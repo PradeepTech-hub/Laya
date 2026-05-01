@@ -561,71 +561,113 @@ function SectionTitle({ eyebrow, title, text }: { eyebrow: string; title: string
 
 function LandingPage({ onStart }: LandingPageProps) {
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Soft gradient background: light green to white */}
-      <div className="absolute inset-0 -z-10 bg-gradient-to-br from-emerald-50 via-white to-emerald-50" />
-      <div className="absolute inset-0 -z-10 opacity-40 bg-[radial-gradient(circle_at_20%_80%,_rgba(34,197,94,0.1),_transparent_40%),radial-gradient(circle_at_80%_20%,_rgba(34,197,94,0.08),_transparent_50%)]" />
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-[#F3D1C2] via-[#EADFD7] to-[#7FAFE0] text-[#333333]">
+      {/* Subtle blurred wave layers for depth */}
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-white/20 blur-[120px] pointer-events-none"></div>
+      <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-blue-300/20 blur-[150px] pointer-events-none"></div>
 
       <style>{`
         @keyframes fadeInSlideUp {
-          from {
-            opacity: 0;
-            transform: translateY(30px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(30px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        .animate-fade-slide {
-          animation: fadeInSlideUp 0.8s ease-out forwards;
+        @keyframes float {
+          0% { transform: translateY(0px); }
+          50% { transform: translateY(-15px); }
+          100% { transform: translateY(0px); }
         }
+        .animate-fade-slide { animation: fadeInSlideUp 0.8s ease-out forwards; }
         .animate-fade-slide-delay-1 { animation-delay: 0.1s; opacity: 0; }
         .animate-fade-slide-delay-2 { animation-delay: 0.2s; opacity: 0; }
         .animate-fade-slide-delay-3 { animation-delay: 0.3s; opacity: 0; }
-        .animate-fade-slide-delay-4 { animation-delay: 0.4s; opacity: 0; }
-        .btn-hover-scale {
-          transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        .btn-hover-scale:hover {
-          transform: scale(1.05);
-        }
-        .card-hover {
+        .animate-float { animation: float 6s ease-in-out infinite; }
+        
+        .glass-btn-primary {
+          background: rgba(255, 255, 255, 0.4);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255, 255, 255, 0.5);
+          box-shadow: 0 8px 32px rgba(255, 165, 0, 0.15);
           transition: all 0.3s ease;
         }
-        .card-hover:hover {
-          transform: translateY(-6px);
-          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+        .glass-btn-primary:hover {
+          background: rgba(255, 255, 255, 0.5);
+          box-shadow: 0 8px 32px rgba(255, 165, 0, 0.3);
+          transform: translateY(-2px);
+        }
+        
+        .glass-btn-secondary {
+          background: rgba(255, 255, 255, 0.2);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255, 255, 255, 0.3);
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+          transition: all 0.3s ease;
+        }
+        .glass-btn-secondary:hover {
+          background: rgba(255, 255, 255, 0.3);
+          transform: translateY(-2px);
+        }
+
+        .glass-card {
+          background: linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 100%);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          border: 1px solid rgba(255, 255, 255, 0.3);
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+          transition: all 0.3s ease;
+        }
+        .glass-card:hover {
+          transform: translateY(-8px);
+          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.08);
+          background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.2) 100%);
         }
       `}</style>
 
-      <div className="w-full px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
-        {/* Hero Section */}
-        <div className="grid gap-12 xl:grid-cols-2 xl:items-center">
-          {/* Left Column */}
-          <div className="animate-fade-slide animate-fade-slide-delay-1">
-            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 mb-6">
-              <Sparkles size={16} />
-              Smart Food Redistribution
-            </div>
+      {/* Navigation */}
+      <nav className="relative z-10 flex items-center justify-between px-6 py-4 lg:px-12 backdrop-blur-md bg-white/30 border-b border-white/20 shadow-[0_4px_30px_rgba(0,0,0,0.05)]">
+        <div className="flex items-center gap-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#333333] text-[#F5F5DC] shadow-sm">
+            <Sparkles size={24} />
+          </div>
+          <span className="text-2xl font-bold tracking-tight text-[#333333]">Laya</span>
+        </div>
+        <div className="flex items-center gap-6">
+          <button
+            onClick={() => onStart('signin', 'customer')}
+            className="text-sm font-bold text-[#333333]/80 hover:text-[#333333] transition-colors"
+          >
+            Sign in
+          </button>
+          <button
+            onClick={() => onStart('signup', 'customer')}
+            className="glass-btn-primary rounded-full px-6 py-2.5 text-sm font-bold text-[#333333]"
+          >
+            Get Started
+          </button>
+        </div>
+      </nav>
 
-            <h1 className="text-5xl sm:text-6xl font-bold tracking-tight text-slate-950 leading-tight">
-              Reduce Food Waste.
+      <div className="mx-auto w-full max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+        {/* Hero Section */}
+        <div className="grid gap-16 lg:grid-cols-2 lg:items-center">
+          {/* Left Column */}
+          <div className="animate-fade-slide animate-fade-slide-delay-1 pt-8 lg:pt-0">
+            <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight leading-[1.1]">
+              <span className="text-[#333333]">Reduce Food Waste.</span>
               <br />
-              <span className="bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent">
-                Feed Communities.
-              </span>
+              <span className="bg-gradient-to-r from-blue-500 to-cyan-500 bg-clip-text text-transparent">Feed Communities.</span>
             </h1>
 
-            <p className="mt-6 text-lg leading-8 text-slate-600 max-w-xl">
+            <p className="mt-8 text-lg leading-relaxed text-[#555555] max-w-xl font-medium">
               Laya connects donors, NGOs, and volunteers using AI to deliver food before it expires. Together, we reduce waste and nourish communities.
             </p>
 
-            <div className="mt-8 flex flex-col sm:flex-row gap-4">
+            <div className="mt-10 flex flex-col sm:flex-row gap-4">
               <button
                 type="button"
                 onClick={() => onStart('signup', 'customer')}
-                className="btn-hover-scale inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-8 py-4 text-base font-semibold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700"
+                className="glass-btn-primary inline-flex items-center justify-center gap-2 rounded-2xl px-8 py-4 text-base font-bold text-[#333333]"
               >
                 <Package size={20} />
                 Donate Food
@@ -633,78 +675,80 @@ function LandingPage({ onStart }: LandingPageProps) {
               <button
                 type="button"
                 onClick={() => onStart('signin', 'customer')}
-                className="btn-hover-scale inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-emerald-200 bg-white px-8 py-4 text-base font-semibold text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50"
+                className="glass-btn-secondary inline-flex items-center justify-center gap-2 rounded-2xl px-8 py-4 text-base font-bold text-[#333333]"
               >
-                <MapPin size={20} />
-                View Live Map
+                Sign in
               </button>
             </div>
           </div>
 
-          {/* Right Column - Illustration Area + Stats */}
-          <div className="space-y-6">
-            {/* Main Illustration Card */}
-            <div className="animate-fade-slide animate-fade-slide-delay-2 card-hover rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-100 to-emerald-50 p-8 shadow-[0_20px_60px_rgba(16,185,129,0.1)]">
-              <div className="flex items-center justify-center h-48 text-emerald-200">
-                <div className="text-center">
-                  <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white/50 mb-4">
-                    <Truck size={40} className="text-emerald-600" />
-                  </div>
-                  <p className="text-sm font-semibold text-emerald-700">Community Food Distribution</p>
-                </div>
+          {/* Right Column - Image & Stats */}
+          <div className="space-y-8 lg:pl-10">
+            {/* Main Visual */}
+            <div className="animate-fade-slide animate-fade-slide-delay-2">
+              <div className="relative overflow-hidden rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] animate-float">
+                {/* Subtle glass overlay on image */}
+                <div className="absolute inset-0 bg-white/10 mix-blend-overlay pointer-events-none z-10"></div>
+                <img 
+                  src="https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80" 
+                  alt="Happy children eating together" 
+                  className="h-[400px] w-full object-cover sm:h-[500px]"
+                />
               </div>
             </div>
 
-            {/* Stat Cards Grid */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="animate-fade-slide animate-fade-slide-delay-3 card-hover rounded-2xl bg-white border border-emerald-100 p-4 text-center shadow-sm">
-                <p className="text-2xl font-bold text-emerald-600">12.5K</p>
-                <p className="mt-1 text-xs font-medium text-slate-600">Meals Saved</p>
+            {/* Stats Bar */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="animate-fade-slide animate-fade-slide-delay-3 rounded-2xl bg-white/30 backdrop-blur-md border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.03)] p-4 text-center">
+                <p className="text-xl sm:text-2xl font-bold text-[#333333]">12.5K</p>
+                <p className="mt-1 text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-blue-600">Meals Saved</p>
               </div>
-              <div className="animate-fade-slide animate-fade-slide-delay-3 card-hover rounded-2xl bg-white border border-emerald-100 p-4 text-center shadow-sm">
-                <p className="text-2xl font-bold text-emerald-600">847</p>
-                <p className="mt-1 text-xs font-medium text-slate-600">Active Deliveries</p>
+              <div className="animate-fade-slide animate-fade-slide-delay-3 rounded-2xl bg-white/30 backdrop-blur-md border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.03)] p-4 text-center">
+                <p className="text-xl sm:text-2xl font-bold text-[#333333]">847</p>
+                <p className="mt-1 text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-blue-600">Active Deliveries</p>
               </div>
-              <div className="animate-fade-slide animate-fade-slide-delay-3 card-hover rounded-2xl bg-white border border-emerald-100 p-4 text-center shadow-sm">
-                <p className="text-2xl font-bold text-emerald-600">156</p>
-                <p className="mt-1 text-xs font-medium text-slate-600">NGOs Connected</p>
+              <div className="animate-fade-slide animate-fade-slide-delay-3 rounded-2xl bg-white/30 backdrop-blur-md border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.03)] p-4 text-center">
+                <p className="text-xl sm:text-2xl font-bold text-[#333333]">156</p>
+                <p className="mt-1 text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-blue-600">NGOs Connected</p>
               </div>
             </div>
           </div>
         </div>
 
         {/* Features Section */}
-        <div className="mt-24">
-          <div className="animate-fade-slide animate-fade-slide-delay-4 text-center mb-12">
-            <h2 className="text-4xl font-bold text-slate-950 mb-4">How Laya Works</h2>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+        <div className="mt-32 pb-32">
+          <div className="animate-fade-slide animate-fade-slide-delay-3 text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl font-black text-[#333333] mb-6 tracking-tight">
+              Stories of Hope: How It Works
+            </h2>
+            <p className="text-lg text-[#555555] max-w-2xl mx-auto font-medium">
               Seamless coordination between donors, NGOs, and volunteers to ensure no food goes to waste.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-            <div className="card-hover w-full rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-100 mb-4">
-                <Building2 size={24} className="text-emerald-600" />
+          <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
+            <div className="glass-card w-full p-8 rounded-2xl">
+              <div className="mb-6 inline-flex items-center justify-center text-blue-500 bg-white/50 p-3 rounded-xl shadow-sm">
+                <Building2 size={32} strokeWidth={2} />
               </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-2">Donors Post</h3>
-              <p className="text-sm text-slate-600">Restaurants, stores, and individuals list surplus food with details and expiry times.</p>
+              <h3 className="text-xl font-bold text-[#333333] mb-3">1. Donors Share</h3>
+              <p className="text-[#555555] leading-relaxed">Restaurants, stores, and families list surplus food with details and expiry times, writing the first chapter of giving.</p>
             </div>
 
-            <div className="card-hover w-full rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-100 mb-4">
-                <BarChart3 size={24} className="text-emerald-600" />
+            <div className="glass-card w-full p-8 rounded-2xl">
+              <div className="mb-6 inline-flex items-center justify-center text-cyan-500 bg-white/50 p-3 rounded-xl shadow-sm">
+                <BarChart3 size={32} strokeWidth={2} />
               </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-2">AI Matches</h3>
-              <p className="text-sm text-slate-600">Our AI engine matches donors with nearby NGOs and creates optimal delivery routes.</p>
+              <h3 className="text-xl font-bold text-[#333333] mb-3">2. AI Matches</h3>
+              <p className="text-[#555555] leading-relaxed">Our intelligent system instantly pairs donors with nearby NGOs and designs optimal routes, connecting those in need.</p>
             </div>
 
-            <div className="card-hover w-full rounded-2xl bg-white p-6 border border-emerald-100 shadow-sm">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-emerald-100 mb-4">
-                <Truck size={24} className="text-emerald-600" />
+            <div className="glass-card w-full p-8 rounded-2xl">
+              <div className="mb-6 inline-flex items-center justify-center text-blue-500 bg-white/50 p-3 rounded-xl shadow-sm">
+                <Truck size={32} strokeWidth={2} />
               </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-2">Volunteers Deliver</h3>
-              <p className="text-sm text-slate-600">Volunteers pick up and deliver to communities, all tracked in real-time on the map.</p>
+              <h3 className="text-xl font-bold text-[#333333] mb-3">3. Volunteers Deliver</h3>
+              <p className="text-[#555555] leading-relaxed">Community members pick up and deliver the food, bringing warmth and nourishment right to the doorstep.</p>
             </div>
           </div>
         </div>
@@ -2777,7 +2821,8 @@ function App() {
           🔌 Offline Mode: Your data is stored locally and will sync when Firestore is available.
         </div>
       )}
-      <header className="sticky top-0 z-40 border-b border-white/80 bg-white/70 backdrop-blur">
+      {page !== 'landing' && (
+        <header className="sticky top-0 z-40 border-b border-white/80 bg-white/70 backdrop-blur">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
           <button type="button" onClick={() => setPage(session ? 'app' : 'landing')} className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-950/15">
@@ -2824,16 +2869,16 @@ function App() {
             <div className="grid gap-2">
               {!session ? (
                 <>
-                  <button type="button" onClick={() => startAuth('signin', 'customer')} className="rounded-2xl bg-slate-100 px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                  <button type="button" onClick={() => startAuth('signin', 'customer')} className="rounded-2xl bg-slate-100 px-4 py-3 text-left text-sm font-bold text-slate-700">
                     Sign in
                   </button>
-                  <button type="button" onClick={() => startAuth('signup', 'customer')} className="rounded-2xl bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white">
+                  <button type="button" onClick={() => startAuth('signup', 'customer')} className="rounded-2xl bg-slate-950 px-4 py-3 text-left text-sm font-bold text-white">
                     Get started
                   </button>
                 </>
               ) : (
                 <>
-                  <button type="button" onClick={handleLogout} className="rounded-2xl bg-slate-100 px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                  <button type="button" onClick={handleLogout} className="rounded-2xl bg-slate-100 px-4 py-3 text-left text-sm font-bold text-slate-700">
                     Sign out
                   </button>
                   {mobileNavItems.map((item) => (
@@ -2845,7 +2890,7 @@ function App() {
                         setPage('app');
                         setMobileMenuOpen(false);
                       }}
-                      className={`rounded-2xl px-4 py-3 text-left text-sm font-semibold ${dashboardView === item.key ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-700'}`}
+                      className={`rounded-2xl px-4 py-3 text-left text-sm font-bold ${dashboardView === item.key ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-700'}`}
                     >
                       {item.label}
                     </button>
@@ -2856,6 +2901,7 @@ function App() {
           </div>
         ) : null}
       </header>
+      )}
 
       {page === 'landing' && <LandingPage onStart={startAuth} />}
       {page === 'auth' && (
