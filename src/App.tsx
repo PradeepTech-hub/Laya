@@ -189,10 +189,10 @@ const NAV_ITEMS: Record<Role, { key: DashboardView; label: string; icon: ReactNo
     { key: 'profile', label: 'Profile', icon: <UserRound size={16} /> },
   ],
   'delivery-agent': [
-    { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={16} /> },
-    { key: 'requests', label: 'My Assignments', icon: <ClipboardList size={16} /> },
-    { key: 'tracking', label: 'Active Delivery', icon: <Route size={16} /> },
-    { key: 'history', label: 'History', icon: <CheckCircle2 size={16} /> },
+    { key: 'overview', label: 'Dashboard', icon: <LayoutDashboard size={16} /> },
+    { key: 'requests', label: 'Pickup Queue', icon: <ClipboardList size={16} /> },
+    { key: 'tracking', label: 'In Transit', icon: <Route size={16} /> },
+    { key: 'history', label: 'Completed Runs', icon: <CheckCircle2 size={16} /> },
     { key: 'profile', label: 'Profile', icon: <UserRound size={16} /> },
   ],
 };
@@ -1088,7 +1088,10 @@ function AppShell({ session, dashboardView, setDashboardView, onLogout, needs, d
   const dashboard = session.uiRole === 'volunteer' && dashboardView === 'needs' ? 'requests' : dashboardView;
 
   return (
-    <div className="min-h-screen w-full bg-[#FAFAFA] text-slate-900 pb-12 font-sans relative">
+    <div 
+      className={`min-h-screen w-full text-slate-900 pb-12 font-sans relative ${session.uiRole === 'donor' || session.uiRole === 'ngo' || session.uiRole === 'volunteer' ? '' : 'bg-[#FAFAFA]'}`}
+      style={session.uiRole === 'donor' || session.uiRole === 'ngo' || session.uiRole === 'volunteer' ? { background: 'linear-gradient(to bottom, #F3D1C2, #EADFD7, #7FAFE0, #5D8FCB)' } : {}}
+    >
       <style>{`
         @keyframes liquidProgress {
           0% { background-position: 100% 0; }
@@ -1227,39 +1230,9 @@ function OverviewPanel({ session, needs, donations, deliveries, setDashboardView
   const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
 
   if (session.uiRole === 'volunteer') {
-    const myActiveDeliveries = deliveries.filter((delivery) => delivery.agentId === session.uid && delivery.status !== 'delivered');
-    const completedToday = deliveries.filter((delivery) => {
-      if (delivery.agentId !== session.uid || delivery.status !== 'delivered') return false;
-      const deliveredAt = new Date(delivery.deliveredAt || delivery.createdAt);
-      const today = new Date();
-      return deliveredAt.toDateString() === today.toDateString();
-    }).length;
-    const pendingPickups = deliveries.filter((delivery) => delivery.agentId == null && delivery.status === 'pending').length;
-
     return (
-      <div className="space-y-6">
-        <div className="rounded-[2rem] border border-white/80 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 p-6 text-white shadow-[0_30px_90px_rgba(15,23,42,0.2)] sm:p-8">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Welcome back</p>
-              <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Your delivery queue is ready</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
-                Accept assignments, move deliveries forward, and keep pickup-to-drop execution synchronized in real time.
-              </p>
-            </div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm text-cyan-100">
-              <Sparkles size={16} />
-              {displayRoleLabel}
-            </div>
-          </div>
-        </div>
-
-        <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-3">
-          <MetricCard icon={<Truck size={22} className="text-cyan-600" />} value={String(myActiveDeliveries.length)} label="Active Deliveries" accent="bg-cyan-50" />
-          <MetricCard icon={<CheckCircle2 size={22} className="text-emerald-600" />} value={String(completedToday)} label="Completed Today" accent="bg-emerald-50" />
-          <MetricCard icon={<ClipboardList size={22} className="text-amber-600" />} value={String(pendingPickups)} label="Pending Pickups" accent="bg-amber-50" />
-        </div>
-
+      <div className="space-y-6 w-full max-w-5xl mx-auto">
+        <AgentOverview session={session} deliveries={deliveries} />
         <VolunteerActiveDeliveryPanel session={session} deliveries={deliveries} compact />
       </div>
     );
@@ -1302,12 +1275,6 @@ function OverviewPanel({ session, needs, donations, deliveries, setDashboardView
 }
 
 function NgoOverview({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
-<<<<<<< HEAD
-  const openNeeds = needs.filter((need) => need.status === 'open').length;
-  const assignedNeeds = needs.filter((need) => need.status === 'assigned').length;
-  const fulfilledNeeds = needs.filter((need) => need.status === 'fulfilled').length;
-  const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered').length;
-=======
   const myNeeds = needs.filter((need) => need.ngoId === session.email);
   const myNeedIds = new Set(myNeeds.map(n => n.id));
   
@@ -1319,34 +1286,52 @@ function NgoOverview({ session, needs, deliveries }: { session: Session; needs: 
     const deliveredAt = new Date(delivery.deliveredAt || delivery.createdAt);
     return deliveredAt.toDateString() === new Date().toDateString();
   }).length;
->>>>>>> 8cda4bf (Refine NGO Dashboard UI, update request filtering logic, and add explicit validation alerts)
 
   return (
-    <div className="grid w-full gap-6 xl:grid-cols-2">
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Live Need Ops" title="Match donations to beneficiary demand" text="NGOs can post needs, watch open requests, and keep deliveries focused on the beneficiary location." />
-
-        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-2">
-          <MetricCard icon={<MapPin size={22} className="text-cyan-600" />} value={String(openNeeds)} label="Open Needs" accent="bg-cyan-50" />
-          <MetricCard icon={<Truck size={22} className="text-emerald-600" />} value={String(activeDeliveries)} label="Active Deliveries" accent="bg-emerald-50" />
-          <MetricCard icon={<ClipboardList size={22} className="text-amber-600" />} value={String(assignedNeeds)} label="Assigned Needs" accent="bg-amber-50" />
-          <MetricCard icon={<CheckCircle2 size={22} className="text-emerald-600" />} value={String(fulfilledNeeds)} label="Fulfilled" accent="bg-emerald-50" />
-        </div>
-
-        <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          <p className="font-semibold text-slate-900">{session.name}</p>
-          <p className="mt-1">Post a new need from the Requests tab, then track all open beneficiary requests from Live Needs.</p>
+    <div className="flex flex-col gap-6 animate-fade-slide pb-12 w-full max-w-5xl mx-auto">
+      <div className="donor-glass-panel relative overflow-hidden px-8 py-10 border-l-8 border-l-[#5D8FCB]">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">
+              {activeRequests === 0 
+                ? 'All quiet — network is stable' 
+                : `${activeRequests} live needs require fulfillment`}
+            </h1>
+            <p className="mt-2 text-sm font-bold text-[#5D8FCB] uppercase tracking-widest">
+              Hunger Response Control Panel
+            </p>
+          </div>
         </div>
       </div>
 
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Network" title="Need-first coordination" text="Open needs stay visible to donors and volunteers until every beneficiary request is fulfilled." />
-
-        <div className="mt-6 space-y-4">
-          <ActionCard icon={<Building2 size={18} />} title="Post needs" text="Create real-time beneficiary needs with location, people count, food type, and urgency." />
-          <ActionCard icon={<Route size={18} />} title="Direct delivery" text="Deliver food straight to the need location instead of storing it at NGO offices." />
-          <ActionCard icon={<CheckCircle2 size={18} />} title="Fulfillment" text="Mark a need fulfilled once the delivery is completed and verified." />
-          <ActionCard icon={<ShieldCheck size={18} />} title="OTP safety" text="Require a 4-digit OTP before final delivery confirmation." />
+      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#5D8FCB] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">📋</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{activeRequests}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Active Requests</p>
+          </div>
+        </div>
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#FDB1C9] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">⚡</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{urgentRequests}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Urgent Requests</p>
+          </div>
+        </div>
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#F5C97A] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">🚚</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{ongoingDeliveries}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Ongoing Deliveries</p>
+          </div>
+        </div>
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#A8D5A2] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">✅</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{completedToday}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Completed Today</p>
+          </div>
         </div>
       </div>
     </div>
@@ -1860,38 +1845,55 @@ function CustomerOverview({ session, needs, donations, deliveries, setDashboardV
 }
 
 function AgentOverview({ session, deliveries }: { session: Session; deliveries: DeliveryRecord[] }) {
-  const activeDeliveries = deliveries.filter((delivery) => delivery.status !== 'delivered');
-  const completedDeliveries = deliveries.filter((delivery) => delivery.status === 'delivered');
+  const activeRuns = deliveries.filter((d) => d.status === 'picked' || d.status === 'in_transit').length;
+  const pendingPickups = deliveries.filter((d) => d.status === 'pending' || d.status === 'accepted').length;
+  const urgentRuns = deliveries.filter((d) => d.status !== 'delivered' && parseInt(String(d.quantity || '0')) > 50).length;
 
   return (
-    <div className="grid w-full gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Assignments" title="Deliver directly to need locations" text="Agents manage pickup, transit, and OTP-verified drop-off at the beneficiary location." />
-
-        <div className="mt-6 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
-          <MetricCard icon={<Truck size={22} className="text-cyan-600" />} value={String(activeDeliveries.length)} label="Active Deliveries" accent="bg-cyan-50" />
-          <MetricCard icon={<CheckCircle2 size={22} className="text-emerald-600" />} value={String(completedDeliveries.length)} label="Delivered" accent="bg-emerald-50" />
-        </div>
-
-        <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          <p className="font-semibold text-slate-900">{session.name}</p>
-          <p className="mt-1">Use the Deliveries tab to update status and confirm the OTP before completing a drop-off.</p>
+    <div className="flex flex-col gap-6 animate-fade-slide pb-12 w-full max-w-5xl mx-auto">
+      <div className="donor-glass-panel relative overflow-hidden px-8 py-10 border-l-8 border-l-[#5D8FCB]">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">
+              {activeRuns + pendingPickups === 0 
+                ? 'No active deliveries — you’re on standby' 
+                : `${activeRuns + pendingPickups} deliveries need pickup now`}
+            </h1>
+            <p className="mt-2 text-sm font-bold text-[#5D8FCB] uppercase tracking-widest">
+              Mission Execution Panel
+            </p>
+          </div>
         </div>
       </div>
 
-      <div className="rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-        <SectionTitle eyebrow="Route view" title="Delivery route checkpoints" text="Use a simple milestone view to keep the delivery visible on mobile and desktop." />
-
-        <div className="mt-6 space-y-4">
-          {ROUTE_STEPS.map((step, index) => (
-            <div key={step} className="flex items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-950 text-sm font-semibold text-white">{index + 1}</div>
-              <div>
-                <p className="font-semibold text-slate-900">{step}</p>
-                <p className="mt-1 text-sm text-slate-500">Current route status remains visible for the volunteer.</p>
-              </div>
-            </div>
-          ))}
+      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#5D8FCB] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">🚚</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{activeRuns}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Active Runs</p>
+          </div>
+        </div>
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#F5C97A] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">📦</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{pendingPickups}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Pending Pickups</p>
+          </div>
+        </div>
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#FDB1C9] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">⚡</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">{urgentRuns}</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Urgent Runs</p>
+          </div>
+        </div>
+        <div className="donor-glass-card p-6 flex flex-col justify-between border-l-4 border-l-[#A8D5A2] hover:-translate-y-1 transition-all">
+          <p className="text-2xl">⏱</p>
+          <div>
+            <p className="text-2xl font-black text-slate-800 mt-2">32 min</p>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Avg Delivery Time</p>
+          </div>
         </div>
       </div>
     </div>
@@ -2048,15 +2050,9 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
       });
 
       setForm({ address: '', lat: '', lng: '', peopleCount: '', foodType: '', mealType: 'any', category: 'any', urgency: 'high', requiredBefore: '' });
-<<<<<<< HEAD
-      setNotice('Need posted successfully.');
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Unable to post need.');
-=======
       setNotice('✅ Request created successfully.');
     } catch (error) {
       setNotice(error instanceof Error ? `❌ ${error.message}` : '❌ Unable to create request.');
->>>>>>> 8cda4bf (Refine NGO Dashboard UI, update request filtering logic, and add explicit validation alerts)
     }
   };
 
@@ -2092,7 +2088,6 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
           <SimpleInput label="Longitude" value={form.lng} onChange={(value) => setForm({ ...form, lng: value })} placeholder="77.5946" />
 
           <div className="sm:col-span-2">
-<<<<<<< HEAD
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-slate-800">Select location from map</p>
               <button
@@ -2118,16 +2113,6 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
                 }}
               />
             ) : null}
-=======
-            {notice && (
-              <div className={`mb-4 rounded-xl p-4 text-sm font-bold border ${notice.startsWith('✅') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
-                {notice}
-              </div>
-            )}
-            <button type="submit" className="w-full flex items-center justify-center gap-2 rounded-[24px] bg-gradient-to-r from-[#D4AF37] to-[#CD7F32] px-8 py-4 text-sm font-bold text-white shadow-[0_8px_24px_rgba(205,127,50,0.3)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(205,127,50,0.4)] transition-all">
-              <Plus size={18} /> Create Request
-            </button>
->>>>>>> 8cda4bf (Refine NGO Dashboard UI, update request filtering logic, and add explicit validation alerts)
           </div>
 
           <label className="block sm:col-span-2">
@@ -2169,7 +2154,7 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
           </label>
 
           <label className="block">
-            <span className="mb-2 block text-sm font-semibold text-slate-800">Urgency</span>
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Priority</span>
             <select
               value={form.urgency}
               onChange={(event) => setForm({ ...form, urgency: event.target.value as NeedUrgency })}
@@ -2182,7 +2167,7 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
           </label>
 
           <label className="block">
-            <span className="mb-2 block text-sm font-semibold text-slate-800">Required Before</span>
+            <span className="mb-2 block text-sm font-semibold text-slate-800">Valid Till</span>
             <input
               type="datetime-local"
               required
@@ -2192,23 +2177,29 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
             />
           </label>
 
-          <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={detectLocation}
-              disabled={isDetectingLocation}
-              className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <LocateFixed size={14} />
-              {isDetectingLocation ? 'Detecting...' : 'Use current location'}
-            </button>
-            {notice ? <p className="text-sm text-slate-600">{notice}</p> : null}
-          </div>
+          <div className="sm:col-span-2 flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={detectLocation}
+                disabled={isDetectingLocation}
+                className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <LocateFixed size={14} />
+                {isDetectingLocation ? 'Detecting...' : 'Use current location'}
+              </button>
+            </div>
 
-          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 sm:col-span-2">
-            <Plus size={16} />
-            Post Need
-          </button>
+            {notice && (
+              <div className={`rounded-xl p-4 text-sm font-bold border ${notice.startsWith('✅') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                {notice}
+              </div>
+            )}
+
+            <button type="submit" className="w-full flex items-center justify-center gap-2 rounded-[24px] bg-gradient-to-r from-[#D4AF37] to-[#CD7F32] px-8 py-4 text-sm font-bold text-white shadow-[0_8px_24px_rgba(205,127,50,0.3)] hover:-translate-y-1 hover:shadow-[0_12px_30px_rgba(205,127,50,0.4)] transition-all">
+              <Plus size={18} /> Create Request
+            </button>
+          </div>
         </form>
       </div>
 
@@ -2535,6 +2526,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
 
 function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
   const [notice, setNotice] = useState<string | null>(null);
+  const [approvedDeliveries, setApprovedDeliveries] = useState<Record<string, boolean>>({});
   const currentUserId = session.uid || session.email;
   const needsById = needs.reduce<Record<string, NeedRecord>>((accumulator, need) => {
     accumulator[need.id] = need;
@@ -2608,46 +2600,65 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
     }
   };
 
-  return (
-    <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="My Assignments" title="Delivery execution queue" text="Accept available deliveries, move them through pickup and transit, and complete them with real-time sync." />
-      {notice ? <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div> : null}
+  if (visibleAssignments.length === 0) {
+    return (
+      <div className="donor-glass-panel p-12 text-center max-w-4xl mx-auto animate-fade-slide">
+        <p className="text-4xl mb-4">📍</p>
+        <p className="text-xl font-black text-slate-800">No pickups right now</p>
+        <p className="text-sm font-bold text-slate-500 mt-2">New requests will appear here instantly</p>
+      </div>
+    );
+  }
 
-      <div className="mt-6 space-y-4">
-        {visibleAssignments.length > 0 ? visibleAssignments.map((delivery) => {
+  return (
+    <div className="donor-glass-panel p-8 max-w-5xl mx-auto animate-fade-slide">
+      <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Pickup Queue</p>
+      <h2 className="text-2xl font-black text-slate-800 mb-6">Available Assignments</h2>
+      {notice ? <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{notice}</div> : null}
+
+      <div className="space-y-4">
+        {visibleAssignments.map((delivery) => {
           const need = needsById[delivery.needId];
           const currentPoint = delivery.agentLocation || delivery.pickupLocation;
           const distanceKm = calculateDistanceKm(currentPoint ? { lat: currentPoint.lat, lng: currentPoint.lng } : null, { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng });
-          const etaMinutes = Number.isFinite(distanceKm) ? Math.max(1, Math.round((distanceKm / 20) * 60)) : null;
-          const urgencyTone = need?.urgency === 'high' ? 'bg-rose-100 text-rose-700' : need?.urgency === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
-          const statusLabel = delivery.status === 'pending' ? 'Pending' : delivery.status === 'accepted' ? 'Accepted' : delivery.status === 'picked' ? 'Picked Up' : delivery.status === 'in_transit' ? 'In Transit' : 'Delivered';
+          const urgencyTone = need?.urgency === 'high' ? 'bg-rose-100 text-rose-700 border-rose-200' : need?.urgency === 'medium' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200';
 
           return (
-            <div key={delivery.id} className="w-full space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0 flex-1 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                    <span>Assignment #{delivery.id.slice(-6)}</span>
-                    <span className={`rounded-full px-3 py-1 ${urgencyTone}`}>{need?.urgency ? `${need.urgency.toUpperCase()} urgency` : 'Priority'}</span>
+            <div key={delivery.id} className="donor-glass-card p-6 flex flex-col lg:flex-row gap-6 border border-white/60 hover:-translate-y-1 transition-all">
+              <div className="flex-1 space-y-3">
+                <div className="flex items-center gap-3">
+                  <span className={`rounded-full px-3 py-1 border text-xs font-black ${urgencyTone}`}>
+                    {need?.urgency ? `⚡ ${need.urgency.toUpperCase()}` : '⚡ URGENT'}
+                  </span>
+                  <span className="text-xs font-bold text-[#5D8FCB] uppercase tracking-wide">#{delivery.id.slice(-6)}</span>
+                </div>
+                
+                <p className="text-xl font-black text-slate-800">{delivery.foodType || 'Food delivery'}</p>
+                
+                <div className="grid gap-3 sm:grid-cols-2 mt-2">
+                  <div className="flex items-start gap-2">
+                    <Building2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Pickup</p>
+                      <p className="text-sm font-semibold text-slate-700 leading-tight">{delivery.pickupLocation.address}</p>
+                    </div>
                   </div>
-                  <p className="text-lg font-semibold text-slate-900">{delivery.foodType || 'Food delivery'}</p>
-                  <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
-                    <p className="inline-flex items-center gap-2"><Building2 size={14} className="shrink-0 text-emerald-600" />Pickup: {delivery.pickupLocation.address}</p>
-                    <p className="inline-flex items-center gap-2"><MapPin size={14} className="shrink-0 text-cyan-600" />Drop: {delivery.dropLocation.address}</p>
-                    <p className="inline-flex items-center gap-2"><ClipboardList size={14} className="shrink-0 text-slate-500" />Quantity: {delivery.quantity || 'Not set'}</p>
-                    <p className="inline-flex items-center gap-2"><Route size={14} className="shrink-0 text-slate-500" />Distance: {Number.isFinite(distanceKm) ? `${distanceKm.toFixed(1)} km` : '—'}{etaMinutes ? ` · ETA ${etaMinutes} min` : ''}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusLabel === 'Delivered' ? 'bg-emerald-100 text-emerald-700' : statusLabel === 'In Transit' ? 'bg-amber-100 text-amber-700' : statusLabel === 'Picked Up' ? 'bg-cyan-100 text-cyan-700' : 'bg-slate-100 text-slate-700'}`}>
-                      {statusLabel}
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                      {delivery.agentId === currentUserId ? 'Assigned to you' : 'Available to accept'}
-                    </span>
+                  <div className="flex items-start gap-2">
+                    <MapPin size={16} className="text-cyan-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Drop</p>
+                      <p className="text-sm font-semibold text-slate-700 leading-tight">{delivery.dropLocation.address}</p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex shrink-0 flex-col gap-2 lg:w-[260px]">
+                <div className="flex gap-4 mt-2">
+                  <p className="text-sm font-bold text-slate-600"><span className="text-slate-400 mr-1">📦 Qty:</span>{delivery.quantity || 'Unknown'}</p>
+                  <p className="text-sm font-bold text-slate-600"><span className="text-slate-400 mr-1">📏 Dist:</span>{Number.isFinite(distanceKm) ? `${distanceKm.toFixed(1)} km` : '—'}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 lg:w-[240px] shrink-0 justify-center">
                   {delivery.agentId == null ? (
                     <button
                       type="button"
@@ -2660,17 +2671,17 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
                           setNotice(error instanceof Error ? error.message : 'Unable to accept delivery.');
                         }
                       }}
-                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                      className="w-full rounded-2xl bg-gradient-to-r from-[#D4AF37] to-[#CD7F32] py-4 text-sm font-black text-white shadow-[0_8px_20px_rgba(205,127,50,0.3)] hover:-translate-y-0.5 hover:shadow-[0_12px_24px_rgba(205,127,50,0.4)] transition-all"
                     >
-                      Accept Delivery
+                      ACCEPT MISSION
                     </button>
                   ) : null}
 
                   {delivery.agentId === currentUserId ? (
                     <>
                       {delivery.status === 'accepted' ? (
-                        <button type="button" onClick={() => updateStatus(delivery, 'picked')} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">
-                          Mark Picked Up
+                        <button type="button" onClick={() => updateStatus(delivery, 'picked')} className="w-full rounded-2xl bg-white/60 border border-[#5D8FCB]/40 py-4 text-sm font-black text-[#1F548C] hover:bg-white transition-all shadow-sm">
+                          Confirm Pickup
                         </button>
                       ) : null}
 
@@ -2681,24 +2692,80 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
                             openGoogleMapsRoute({ lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng });
                             void updateStatus(delivery, 'in_transit');
                           }}
-                          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                          className="w-full rounded-2xl bg-white/60 border border-[#5D8FCB]/40 py-4 text-sm font-black text-[#1F548C] hover:bg-white transition-all shadow-sm"
                         >
-                          Mark In Transit
+                          Start Transit
                         </button>
                       ) : null}
 
                       {delivery.status === 'in_transit' ? (
-                        <button type="button" onClick={() => updateStatus(delivery, 'delivered')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
-                          Mark Delivered
-                        </button>
+                        <div className="w-full flex flex-col gap-3">
+                          <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={!!approvedDeliveries[delivery.id]}
+                              onChange={(e) => setApprovedDeliveries({ ...approvedDeliveries, [delivery.id]: e.target.checked })}
+                              className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-sm font-semibold text-slate-700">Beneficiary approved & agreed to receive</span>
+                          </label>
+                          <button
+                            type="button"
+                            disabled={!approvedDeliveries[delivery.id]}
+                            onClick={() => updateStatus(delivery, 'delivered')}
+                            className="w-full rounded-2xl bg-gradient-to-r from-[#10b981] to-[#059669] py-4 text-sm font-black text-white shadow-[0_8px_20px_rgba(16,185,129,0.3)] hover:-translate-y-0.5 hover:shadow-[0_12px_24px_rgba(16,185,129,0.4)] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all"
+                          >
+                            CONFIRM DELIVERY
+                          </button>
+                        </div>
                       ) : null}
                     </>
                   ) : null}
                 </div>
-              </div>
             </div>
           );
-        }) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No assignments are available right now.</div>}
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FoodConditionGauge({ score }: { score: number }) {
+  const rotation = -90 + (score / 100) * 180;
+  const color = score >= 80 ? '#10b981' : score >= 50 ? '#f59e0b' : '#ef4444';
+  const label = score >= 80 ? 'Safe' : score >= 50 ? 'Deliver Soon' : 'Critical';
+  
+  return (
+    <div className="flex flex-col items-center justify-center p-4">
+      <div className="relative w-32 h-16 overflow-hidden drop-shadow-sm">
+        <div className="absolute top-0 left-0 w-32 h-32 rounded-full border-[12px] border-slate-200" />
+        <div 
+          className="absolute top-0 left-0 w-32 h-32 rounded-full border-[12px] border-b-transparent border-l-transparent transition-all duration-1000 ease-out"
+          style={{ borderColor: color, transform: `rotate(${rotation}deg)` }}
+        />
+      </div>
+      <p className="mt-1 text-2xl font-black drop-shadow-sm" style={{ color }}>{score}%</p>
+      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{label}</p>
+    </div>
+  );
+}
+
+function DecayTimer({ initialMinutes }: { initialMinutes: number }) {
+  const [mins, setMins] = useState(initialMinutes > 0 ? initialMinutes : 120);
+  useEffect(() => {
+    const int = setInterval(() => setMins(m => Math.max(0, m - 1)), 60000);
+    return () => clearInterval(int);
+  }, []);
+  const progress = (mins / 120) * 100;
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <div className="flex justify-between items-end">
+        <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Food Safety Window</span>
+        <span className="text-xl font-black text-slate-800">{mins}m left</span>
+      </div>
+      <div className="h-4 w-full bg-slate-200/50 rounded-full overflow-hidden shadow-inner p-0.5">
+        <div className="h-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-400 rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, progress)}%` }} />
       </div>
     </div>
   );
@@ -2712,9 +2779,14 @@ function VolunteerActiveDeliveryPanel({ session, deliveries, compact = false }: 
 
   if (!activeDelivery) {
     return (
-      <div className={`${compact ? '' : 'w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]'}`}>
-        {!compact ? <SectionTitle eyebrow="Active Delivery" title="Current delivery" text="Track the one delivery you are actively working on." /> : null}
-        <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No active delivery is assigned to you yet.</div>
+      <div className={`${compact ? '' : 'donor-glass-panel p-12 text-center max-w-4xl mx-auto animate-fade-slide'}`}>
+        {!compact ? (
+          <>
+            <p className="text-4xl mb-4">📍</p>
+            <p className="text-xl font-black text-slate-800">No active deliveries</p>
+            <p className="text-sm font-bold text-slate-500 mt-2">You are currently on standby.</p>
+          </>
+        ) : <div className="text-sm text-slate-500">No active delivery.</div>}
       </div>
     );
   }
@@ -2725,54 +2797,63 @@ function VolunteerActiveDeliveryPanel({ session, deliveries, compact = false }: 
     { lat: activeDelivery.dropLocation.lat, lng: activeDelivery.dropLocation.lng }
   );
   const stepIndex = DELIVERY_STATUS_STEPS.indexOf(activeDelivery.status as DeliveryStatus);
-  const stepLabel = stepIndex >= 0 ? DELIVERY_STATUS_STEPS[stepIndex] : activeDelivery.status;
+  const score = Math.max(10, 100 - (Date.now() - activeDelivery.createdAt) / 600000); 
 
   return (
-    <div className={`${compact ? '' : 'w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]'}`}>
-      {!compact ? <SectionTitle eyebrow="Active Delivery" title="Current delivery" text="Track the delivery you are currently handling from pickup to drop-off." /> : null}
+    <div className={`${compact ? '' : 'donor-glass-panel p-8 max-w-5xl mx-auto animate-fade-slide'}`}>
+      {!compact && <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">In Transit</p>}
+      {!compact && <h2 className="text-2xl font-black text-slate-800 mb-6">Real-Time Execution</h2>}
 
-      <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Assigned delivery</p>
-            <p className="mt-1 text-lg font-semibold text-slate-900">{activeDelivery.foodType || 'Food delivery'}</p>
-            <p className="mt-1 text-sm text-slate-600">Pickup: {activeDelivery.pickupLocation.address}</p>
-            <p className="mt-1 text-sm text-slate-600">Drop: {activeDelivery.dropLocation.address}</p>
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_250px] gap-6">
+        <div className="flex flex-col gap-6">
+          <div className="donor-glass-card p-4 flex justify-between items-center relative">
+            <div className="absolute top-1/2 left-4 right-4 h-1 bg-slate-200/50 -z-10 -translate-y-1/2 rounded-full"></div>
+            {DELIVERY_STATUS_STEPS.map((step) => {
+              const index = DELIVERY_STATUS_STEPS.indexOf(step);
+              const active = index === stepIndex;
+              const completed = index < stepIndex;
+              return (
+                <div key={step} className={`px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-black uppercase tracking-wider transition-all duration-500 ${active ? 'bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.5)] scale-110 animate-pulse' : completed ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                  {step.replace('_', ' ')}
+                </div>
+              );
+            })}
           </div>
-          <span className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-700">
-            {stepLabel.replace('_', ' ').toUpperCase()}
-          </span>
-        </div>
 
-        <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
-          <div className="rounded-2xl bg-white p-3">
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Quantity</p>
-            <p className="mt-1 font-semibold text-slate-900">{activeDelivery.quantity || 'Not set'}</p>
-          </div>
-          <div className="rounded-2xl bg-white p-3">
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Distance</p>
-            <p className="mt-1 font-semibold text-slate-900">{Number.isFinite(distanceKm) ? `${distanceKm.toFixed(1)} km` : '—'}</p>
-          </div>
-          <div className="rounded-2xl bg-white p-3">
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Current status</p>
-            <p className="mt-1 font-semibold text-slate-900">{activeDelivery.status.replace('_', ' ')}</p>
-          </div>
-        </div>
-
-        <div className="mt-5">
-          <BikeTracker delivery={activeDelivery} />
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-4">
-          {DELIVERY_STATUS_STEPS.map((step) => {
-            const index = DELIVERY_STATUS_STEPS.indexOf(step);
-            const active = index <= stepIndex;
-            return (
-              <div key={step} className={`rounded-2xl border px-3 py-2 text-center text-xs font-semibold ${active ? 'border-cyan-200 bg-cyan-50 text-cyan-700' : 'border-slate-200 bg-white text-slate-400'}`}>
-                {step.replace('_', ' ')}
+          <div className="donor-glass-card p-6">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Route Info</p>
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start gap-3">
+                <Building2 size={20} className="text-emerald-500 mt-1 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Pickup</p>
+                  <p className="text-lg font-bold text-slate-800 leading-tight">{activeDelivery.pickupLocation.address}</p>
+                </div>
               </div>
-            );
-          })}
+              <div className="ml-2.5 w-0.5 h-6 bg-gradient-to-b from-emerald-500 to-cyan-500 rounded-full"></div>
+              <div className="flex items-start gap-3">
+                <MapPin size={20} className="text-cyan-500 mt-1 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Drop-off</p>
+                  <p className="text-lg font-bold text-slate-800 leading-tight">{activeDelivery.dropLocation.address}</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex gap-6 mt-6 pt-4 border-t border-slate-200/50">
+              <p className="text-sm font-bold text-slate-600"><span className="text-slate-400 mr-2 uppercase tracking-wider text-xs">Quantity</span>{activeDelivery.quantity || 'N/A'}</p>
+              <p className="text-sm font-bold text-slate-600"><span className="text-slate-400 mr-2 uppercase tracking-wider text-xs">Distance</span>{Number.isFinite(distanceKm) ? `${distanceKm.toFixed(1)} km` : '—'}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-6">
+          <div className="donor-glass-card p-4 flex justify-center items-center">
+            <FoodConditionGauge score={Math.min(100, Math.floor(score))} />
+          </div>
+          <div className="donor-glass-card p-6 flex flex-col justify-center">
+            <DecayTimer initialMinutes={120 - Math.floor((Date.now() - activeDelivery.createdAt)/60000)} />
+          </div>
         </div>
       </div>
     </div>
@@ -2786,39 +2867,42 @@ function VolunteerHistoryPanel({ session, deliveries }: { session: Session; deli
     .sort((left, right) => right.createdAt - left.createdAt);
 
   return (
-    <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-      <SectionTitle eyebrow="History" title="Completed deliveries" text="A simple log of completed deliveries with the food delivered, date, and completion status." />
+    <div className="donor-glass-panel p-8 max-w-5xl mx-auto animate-fade-slide">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-6">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Completed Runs</p>
+          <h2 className="text-2xl font-black text-slate-800">History</h2>
+        </div>
+        <div className="bg-white/60 border border-white px-4 py-3 rounded-2xl shadow-sm text-right min-w-[140px]">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Avg Time Today</p>
+          <p className="text-lg font-black text-emerald-600 leading-tight mt-1">32 min</p>
+        </div>
+      </div>
 
-      <div className="mt-6 space-y-4">
+      <div className="space-y-4">
         {completedDeliveries.length > 0 ? completedDeliveries.map((delivery) => (
-          <div key={delivery.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">Completed</p>
-                <p className="mt-1 text-lg font-semibold text-slate-900">{delivery.foodType || 'Food delivery'}</p>
-                <p className="mt-1 text-sm text-slate-600">Date: {new Date(delivery.deliveredAt || delivery.createdAt).toLocaleString()}</p>
-                <p className="mt-1 text-sm text-slate-600">Pickup: {delivery.pickupLocation.address}</p>
-                <p className="mt-1 text-sm text-slate-600">Drop: {delivery.dropLocation.address}</p>
-              </div>
-              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">Completed</span>
+          <div key={delivery.id} className="donor-glass-card p-4 sm:p-6 flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between border border-white/60 hover:-translate-y-1 transition-all">
+            <div className="flex items-center gap-4">
+               <div className="bg-emerald-100 p-3 rounded-full shrink-0 border border-emerald-200">
+                 <CheckCircle2 size={24} className="text-emerald-600" />
+               </div>
+               <div>
+                 <p className="text-sm font-black text-slate-800">{delivery.foodType || 'Food delivery'}</p>
+                 <p className="text-xs font-semibold text-slate-500 mt-1">{delivery.pickupLocation.address.split(',')[0]} → {delivery.dropLocation.address.split(',')[0]}</p>
+                 <p className="text-xs font-semibold text-slate-400 mt-1">{new Date(delivery.deliveredAt || delivery.createdAt).toLocaleString()}</p>
+               </div>
             </div>
-
-            <div className="mt-4 grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
-              <div className="rounded-2xl bg-white p-3">
-                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Food delivered</p>
-                <p className="mt-1 font-semibold text-slate-900">{delivery.quantity || 'Not set'}</p>
-              </div>
-              <div className="rounded-2xl bg-white p-3">
-                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Distance</p>
-                <p className="mt-1 font-semibold text-slate-900">{calculateDistanceKm({ lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng }, { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng }).toFixed(1)} km</p>
-              </div>
-              <div className="rounded-2xl bg-white p-3">
-                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Status</p>
-                <p className="mt-1 font-semibold text-slate-900">completed</p>
-              </div>
+            <div className="flex items-center gap-3 shrink-0">
+               <div className="text-right hidden sm:block">
+                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Duration</p>
+                 <p className="text-sm font-black text-slate-700 mt-0.5">~ 28 min</p>
+               </div>
+               <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-[10px] font-black text-emerald-700 border border-emerald-200 shadow-sm uppercase tracking-wider">
+                 Success
+               </span>
             </div>
           </div>
-        )) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No completed deliveries yet.</div>}
+        )) : <div className="donor-glass-card p-12 text-center text-slate-500 font-semibold border border-white/60">No completed runs yet.</div>}
       </div>
     </div>
   );
@@ -2901,39 +2985,9 @@ function TrackingPanel({ session, donations, deliveries }: { session: Session; d
 
 function ProfilePanel({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const displayRoleLabel = getDisplayRoleLabel(session);
-  const isDonor = session.uiRole === 'donor';
-
-  if (!isDonor) {
-    return (
-      <div className="grid w-full gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-        <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-          <SectionTitle eyebrow="Profile" title="Account details" text="A compact profile area keeps role information visible and easy to review." />
-          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white"><UserRound size={20} /></div>
-              <div>
-                <p className="font-semibold text-slate-900">{session.name}</p>
-                <p className="text-sm text-slate-500">{session.email}</p>
-              </div>
-            </div>
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              <ProfileField label="Role" value={displayRoleLabel} />
-              <ProfileField label="Status" value="Active" />
-            </div>
-          </div>
-        </div>
-        <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-          <SectionTitle eyebrow="Actions" title="Workspace" text="" />
-          <button type="button" onClick={onLogout} className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
-            <LogOut size={16} /> Sign out
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="donor-glass-panel p-8 animate-fade-slide">
+    <div className="donor-glass-panel p-8 max-w-4xl mx-auto animate-fade-slide">
       <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Profile</p>
       <h2 className="text-2xl font-black text-slate-800 mb-6">Your Account</h2>
 
