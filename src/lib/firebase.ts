@@ -6,7 +6,7 @@ import {
   signOut as fbSignOut,
   onAuthStateChanged as fbOnAuthStateChanged,
   GoogleAuthProvider,
-  signInWithPopup,
+  signInWithRedirect,
   type User as FirebaseUser,
 } from 'firebase/auth';
 import {
@@ -35,6 +35,9 @@ type UserProfile = {
   role?: string;
   displayRoleLabel?: string;
   uiRole?: string;
+  vehicleNumber?: string;
+  profileImageUrl?: string;
+  createdAt?: number;
 };
 
 type NeedLocation = {
@@ -91,6 +94,9 @@ type DeliveryRecord = {
   quantity?: string;
   status: 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered' | 'cancelled';
   deliveredAt?: number;
+  agentName?: string;
+  agentVehicleNumber?: string;
+  agentProfileImageUrl?: string;
   createdAt: number;
 };
 
@@ -280,13 +286,32 @@ export function isInOfflineMode() {
   return forceLocalStore;
 }
 
-export async function signUpWithEmail(email: string, password: string, name: string, role: string, displayRoleLabel?: string, uiRole?: string) {
+export async function signUpWithEmail(
+  email: string,
+  password: string,
+  name: string,
+  role: string,
+  displayRoleLabel?: string,
+  uiRole?: string,
+  vehicleNumber?: string,
+  profileImageUrl?: string
+) {
   if (!isFirebaseConfigured()) throw new Error('Firebase not configured');
 
   const userCredential = await createUserWithEmailAndPassword(auth!, email, password);
   const uid = userCredential.user.uid;
 
-  const profile: UserProfile = { uid, name, email, role, displayRoleLabel, uiRole };
+  const profile: UserProfile = {
+    uid,
+    name,
+    email,
+    role,
+    displayRoleLabel,
+    uiRole,
+    vehicleNumber: uiRole === 'volunteer' ? vehicleNumber : undefined,
+    profileImageUrl: uiRole === 'volunteer' ? profileImageUrl : undefined,
+    createdAt: Date.now(),
+  };
 
   const firestore = getDb();
   if (firestore) {
@@ -353,42 +378,31 @@ export async function setUserProfile(uid: string, profile: Partial<UserProfile>)
   }
 }
 
-export async function signInWithGoogle(role: string, displayRoleLabel?: string, uiRole?: string): Promise<FirebaseUser> {
+/**
+ * Get agent details (name, vehicleNumber, profileImageUrl) for delivery display
+ */
+export async function getAgentDetails(agentId: string) {
+  if (!agentId) return null;
+
+  try {
+    const profile = await getUserProfile(agentId);
+    if (!profile) return null;
+
+    return {
+      name: profile.name || 'Delivery Agent',
+      vehicleNumber: profile.vehicleNumber || 'N/A',
+      profileImageUrl: profile.profileImageUrl || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function signInWithGoogle(): Promise<void> {
   if (!isFirebaseConfigured()) throw new Error('Firebase not configured');
 
   const provider = new GoogleAuthProvider();
-  const userCredential = await signInWithPopup(auth!, provider);
-  const user = userCredential.user;
-  const uid = user.uid;
-
-  // Check if profile exists
-  const existingProfile = await getUserProfile(uid);
-
-  if (!existingProfile) {
-    // New user - create profile with provided role
-    const name = user.displayName || user.email?.split('@')[0] || 'User';
-    const profile: UserProfile = { uid, name, email: user.email || '', role, displayRoleLabel, uiRole };
-    const firestore = getDb();
-    if (firestore) {
-      try {
-        await setDoc(doc(firestore, 'users', uid), profile);
-      } catch {
-        // ignore Firestore availability issues
-      }
-    }
-  } else if ((displayRoleLabel && existingProfile.displayRoleLabel !== displayRoleLabel) || (uiRole && existingProfile.uiRole !== uiRole)) {
-    const firestore = getDb();
-    if (firestore) {
-      try {
-        await setDoc(doc(firestore, 'users', uid), { displayRoleLabel, uiRole }, { merge: true } as Record<string, unknown>);
-      } catch (error) {
-        // ignore Firestore availability issues
-        console.warn('[LAYA] setDoc merge failed:', error);
-      }
-    }
-  }
-
-  return user;
+  await signInWithRedirect(auth!, provider);
 }
 
 export function listenToNeeds(callback: (needs: NeedRecord[]) => void) {
@@ -1188,7 +1202,7 @@ export async function updateDelivery(id: string, patch: Partial<Omit<DeliveryRec
 }
 
 export async function acceptDeliveryAssignment(id: string, agentId: string) {
-  const acceptLocal = () => {
+  const acceptLocal = (agentInfo?: { name?: string; vehicleNumber?: string; profileImageUrl?: string }) => {
     const deliveries = readLocalDeliveries().map((item) => {
       if (item.id !== id) return item;
 
@@ -1199,6 +1213,9 @@ export async function acceptDeliveryAssignment(id: string, agentId: string) {
       return {
         ...item,
         agentId,
+        agentName: agentInfo?.name,
+        agentVehicleNumber: agentInfo?.vehicleNumber,
+        agentProfileImageUrl: agentInfo?.profileImageUrl,
         status: 'accepted' as DeliveryRecord['status'],
       };
     });
@@ -1216,6 +1233,14 @@ export async function acceptDeliveryAssignment(id: string, agentId: string) {
     const firestore = getFirestoreDbOrThrow();
     const deliveryRef = doc(firestore, 'deliveries', id);
 
+    // Get agent details
+    const agentProfile = await getUserProfile(agentId);
+    const agentInfo = {
+      name: agentProfile?.name || 'Delivery Agent',
+      vehicleNumber: agentProfile?.vehicleNumber,
+      profileImageUrl: agentProfile?.profileImageUrl,
+    };
+
     await runTransaction(firestore, async (tx) => {
       const snap = await tx.get(deliveryRef);
       if (!snap.exists()) {
@@ -1232,10 +1257,16 @@ export async function acceptDeliveryAssignment(id: string, agentId: string) {
         throw new Error('Delivery is no longer available');
       }
 
-      tx.update(deliveryRef, { agentId, status: 'accepted' } as DocumentData);
+      tx.update(deliveryRef, {
+        agentId,
+        agentName: agentInfo.name,
+        agentVehicleNumber: agentInfo.vehicleNumber,
+        agentProfileImageUrl: agentInfo.profileImageUrl,
+        status: 'accepted',
+      } as DocumentData);
     });
 
-    return acceptLocal();
+    return acceptLocal(agentInfo);
   } catch (error) {
     console.warn('[LAYA] acceptDeliveryAssignment failed, falling back to local:', error);
     if (isFirestoreUnavailableError(error)) {

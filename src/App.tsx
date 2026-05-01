@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import DonorDashboard from './components/DonorDashboard';
 import L from 'leaflet';
 import {
   ArrowRight,
@@ -34,6 +35,7 @@ import {
   onAuthStateChanged as fbOnAuthStateChanged,
   getUserProfile as fbGetUserProfile,
   setUserProfile as fbSetUserProfile,
+  getAgentDetails as fbGetAgentDetails,
   signInWithGoogle,
   listenToNeeds,
   listenToDonations,
@@ -155,6 +157,7 @@ type AppShellProps = {
 const ACCOUNTS_KEY = 'laya.accounts.v1';
 const SESSION_KEY = 'laya.session.v1';
 const PROFILE_CACHE_KEY = 'laya.profile-cache.v1';
+const GOOGLE_AUTH_PENDING_KEY = 'laya.google-auth-pending.v1';
 
 const DEFAULT_ACCOUNTS: Account[] = [
   { name: 'Demo Donor', email: 'customer@laya.com', password: 'customer123', role: 'customer' },
@@ -1000,6 +1003,45 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
                     onChange={(e) => setForm({ ...form, password: e.target.value })}
                     className="input-glow w-full px-5 py-3.5 rounded-2xl border border-white/50 bg-white/40 backdrop-blur-sm text-sm text-slate-800 placeholder:text-slate-500 outline-none transition-all"
                   />
+
+                  {/* Volunteer-specific fields */}
+                  {mode === 'signup' && uiRole === 'volunteer' && (
+                    <>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Vehicle Number (e.g., KA-05-AB-1234)"
+                        value={form.vehicleNumber}
+                        onChange={(e) => setForm({ ...form, vehicleNumber: e.target.value })}
+                        className="input-glow w-full px-5 py-3.5 rounded-2xl border border-white/50 bg-white/40 backdrop-blur-sm text-sm text-slate-800 placeholder:text-slate-500 outline-none transition-all"
+                      />
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold text-slate-600">Profile Picture (Optional)</label>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = (event) => {
+                                const base64 = event.target?.result as string;
+                                setForm({ ...form, profileImageUrl: base64 });
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                          className="input-glow w-full px-5 py-3.5 rounded-2xl border border-white/50 bg-white/40 backdrop-blur-sm text-sm text-slate-800 placeholder:text-slate-500 outline-none transition-all"
+                        />
+                        {form.profileImageUrl && (
+                          <div className="flex items-center gap-3 p-3 bg-white/30 rounded-xl">
+                            <img src={form.profileImageUrl} alt="Preview" className="w-12 h-12 rounded-full object-cover" />
+                            <span className="text-xs text-slate-600">Image uploaded</span>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
 
                   {notice && (
                     <div className="rounded-xl bg-red-50/80 border border-red-100 p-3 text-xs font-medium text-red-600">
@@ -2207,7 +2249,7 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
         <div className="mt-6">
           <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Incoming Deliveries</h3>
           <div className="mt-3 space-y-3">
-            {incomingDeliveries.length > 0 ? incomingDeliveries.map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No incoming deliveries for this NGO yet.</div>}
+            {incomingDeliveries.length > 0 ? incomingDeliveries.map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} session={session} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No incoming deliveries for this NGO yet.</div>}
           </div>
         </div>
       </div>
@@ -2541,7 +2583,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
         </div>
 
         <div className="mt-6 space-y-3">
-          {myDeliveries.length > 0 ? myDeliveries.slice(0, 4).map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No deliveries have been matched yet.</div>}
+          {myDeliveries.length > 0 ? myDeliveries.slice(0, 4).map((delivery) => <ShipmentCard key={delivery.id} delivery={delivery} session={session} />) : <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">No deliveries have been matched yet.</div>}
         </div>
       </div>
     </div>
@@ -2951,7 +2993,7 @@ function TrackingPanel({ session, donations, deliveries }: { session: Session; d
               <p className="mt-3 text-sm leading-6 text-slate-600">Active: {activeDonations}</p>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {deliveries.slice(0, 3).length > 0 ? deliveries.slice(0, 3).map((d) => <ShipmentCard key={d.id} delivery={d} />) : <div className="rounded-3xl border border-white/70 bg-white/85 p-4 text-sm text-slate-500">No deliveries yet.</div>}
+              {deliveries.slice(0, 3).length > 0 ? deliveries.slice(0, 3).map((d) => <ShipmentCard key={d.id} delivery={d} session={session} />) : <div className="rounded-3xl border border-white/70 bg-white/85 p-4 text-sm text-slate-500">No deliveries yet.</div>}
             </div>
           </div>
         </div>
@@ -3134,7 +3176,7 @@ function NeedCard({ need, allowFulfill = false, onFulfill }: { need: NeedRecord;
   );
 }
 
-function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
+function ShipmentCard({ delivery, session }: { delivery: DeliveryRecord; session?: Session | null }) {
   const statusMeta: Record<DeliveryStatus, { label: string; tone: string }> = {
     pending: { label: 'Pending', tone: 'bg-slate-100 text-slate-700' },
     accepted: { label: 'Accepted', tone: 'bg-cyan-100 text-cyan-700' },
@@ -3199,14 +3241,14 @@ function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
         </span>
       </div>
 
-      <div className="mt-4">
-        <BikeTracker delivery={delivery} />
+        <div className="mt-4">
+        <BikeTracker delivery={delivery} session={session} />
       </div>
     </div>
   );
 }
 
-function BikeTracker({ delivery }: { delivery: DeliveryRecord }) {
+function BikeTracker({ delivery, session }: { delivery: DeliveryRecord; session?: Session | null }) {
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const start = { lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng };
   const dest = { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng };
@@ -3292,22 +3334,38 @@ function BikeTracker({ delivery }: { delivery: DeliveryRecord }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => openGoogleMapsRoute(start)}
-          className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-        >
-          Navigate to Pickup
-        </button>
-        {delivery.status !== 'pending' && delivery.status !== 'delivered' ? (
-          <button
-            type="button"
-            onClick={() => openGoogleMapsRoute(dest)}
-            className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
-          >
-            Navigate to Drop
-          </button>
-        ) : null}
+        {session && session.uiRole === 'volunteer' ? (
+          <>
+            <button
+              type="button"
+              onClick={() => openGoogleMapsRoute(start)}
+              className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+            >
+              Navigate to Pickup
+            </button>
+            {delivery.status !== 'pending' && delivery.status !== 'delivered' ? (
+              <button
+                type="button"
+                onClick={() => openGoogleMapsRoute(dest)}
+                className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+              >
+                Navigate to Drop
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <div className="rounded-2xl border border-white bg-white p-4 text-sm text-slate-700 shadow-sm">
+            <p className="text-sm text-slate-800">Status: <span className="font-semibold">{statusLabel}</span></p>
+            {delivery.agentId ? (
+              <p className="mt-2 text-sm text-slate-700">Assigned agent: <span className="font-medium">Agent assigned</span></p>
+            ) : (
+              <p className="mt-2 text-sm text-slate-600">Waiting for delivery agent assignment</p>
+            )}
+            {Number.isFinite(routeDuration) ? (
+              <p className="mt-2 text-sm text-slate-700">ETA: <span className="font-medium">{Math.round(routeDuration)} min</span></p>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3339,7 +3397,13 @@ function App() {
   const [dashboardView, setDashboardView] = useState<DashboardView>('overview');
   const [authMode, setAuthMode] = useState<AuthMode>('signin');
   const [authRole, setAuthRole] = useState<Role>('customer');
-  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
+  const [authForm, setAuthForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    vehicleNumber: '',
+    profileImageUrl: '',
+  });
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [migrationDone, setMigrationDone] = useState(false);
@@ -3396,21 +3460,35 @@ function App() {
 
       try {
         const profile = await fbGetUserProfile(user.uid);
+        const pendingGoogleAuth = typeof window !== 'undefined' ? window.localStorage.getItem(GOOGLE_AUTH_PENDING_KEY) : null;
+        const pendingAuth = pendingGoogleAuth ? (JSON.parse(pendingGoogleAuth) as { role?: Role; uiRole?: UiRole; displayRoleLabel?: string } | null) : null;
         const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
-        const role = (profile?.role as Role) || 'customer';
-        const uiRole = (profile?.uiRole as UiRole) || (profile?.displayRoleLabel === 'Volunteer' ? 'volunteer' : profile?.displayRoleLabel === 'NGO' ? 'ngo' : 'donor');
-        setSession({ uid: user.uid, name, email: user.email || '', role, uiRole, displayRoleLabel: profile?.displayRoleLabel });
+        const role = (profile?.role as Role) || pendingAuth?.role || 'customer';
+        const uiRole = (profile?.uiRole as UiRole) || pendingAuth?.uiRole || (profile?.displayRoleLabel === 'Volunteer' ? 'volunteer' : profile?.displayRoleLabel === 'NGO' ? 'ngo' : 'donor');
+        const displayRoleLabel = profile?.displayRoleLabel || pendingAuth?.displayRoleLabel;
+
+        setSession({ uid: user.uid, name, email: user.email || '', role, uiRole, displayRoleLabel });
         setPage('app');
         setDashboardView('overview');
+
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(GOOGLE_AUTH_PENDING_KEY);
+        }
       } catch {
+        const pendingGoogleAuth = typeof window !== 'undefined' ? window.localStorage.getItem(GOOGLE_AUTH_PENDING_KEY) : null;
+        const pendingAuth = pendingGoogleAuth ? (JSON.parse(pendingGoogleAuth) as { role?: Role; uiRole?: UiRole; displayRoleLabel?: string } | null) : null;
         setSession({
           uid: user.uid,
           name: user.displayName || user.email?.split('@')[0] || 'User',
           email: user.email || '',
-          role: 'customer',
-          uiRole: 'donor',
+          role: pendingAuth?.role || 'customer',
+          uiRole: pendingAuth?.uiRole || 'donor',
+          displayRoleLabel: pendingAuth?.displayRoleLabel,
         });
         setPage('app');
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(GOOGLE_AUTH_PENDING_KEY);
+        }
       }
     });
 
@@ -3503,11 +3581,30 @@ function App() {
     };
   }, []);
 
+  const demoMode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('demo') === 'donor-dashboard' : false;
+
+  if (demoMode) {
+    const sampleDonations = [
+      { id: 'd1', foodName: 'Vegetable Curry (2L)', pickupLocation: 'Community Kitchen, MG Road', status: 'pending', eta: null, assignedAgent: null },
+      { id: 'd2', foodName: 'Packaged Bread (30 pcs)', pickupLocation: 'Bakery Lane, Block B', status: 'assigned', eta: '18 min', assignedAgent: { name: 'Arun Kumar' } },
+      { id: 'd3', foodName: 'Fruit Box (assorted)', pickupLocation: 'Green Apartments Lobby', status: 'picked', eta: '9 min', assignedAgent: { name: 'Sita Rao' } },
+    ];
+
+    return (
+      <div className="min-h-screen bg-slate-50 p-6">
+        <div className="mx-auto max-w-2xl">
+          <h2 className="mb-4 text-2xl font-semibold text-slate-900">Donor Dashboard (Demo)</h2>
+          <DonorDashboard donations={sampleDonations} />
+        </div>
+      </div>
+    );
+  }
+
   const startAuth = (mode: AuthMode, role: Role) => {
     setAuthMode(mode);
     setAuthRole(role);
     setAuthNotice(null);
-    setAuthForm({ name: '', email: '', password: '' });
+    setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
     setPage('auth');
   };
 
@@ -3521,10 +3618,19 @@ function App() {
     if (useFirebase && isFirebaseConfigured()) {
       try {
         if (authMode === 'signup') {
-          await signUpWithEmail(email, authForm.password, name || email.split('@')[0], authRole, formatUiRole(selectedUiRole), selectedUiRole);
+          await signUpWithEmail(
+            email,
+            authForm.password,
+            name || email.split('@')[0],
+            authRole,
+            formatUiRole(selectedUiRole),
+            selectedUiRole,
+            selectedUiRole === 'volunteer' ? authForm.vehicleNumber : undefined,
+            selectedUiRole === 'volunteer' ? authForm.profileImageUrl : undefined
+          );
           setProfileCache(email, { name: name || email.split('@')[0], displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole });
           setAuthNotice('Account created successfully.');
-          setAuthForm({ name: '', email: '', password: '' });
+          setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
           setPage('app');
           setDashboardView('overview');
           return;
@@ -3540,7 +3646,7 @@ function App() {
           uiRole: selectedUiRole,
         });
         setAuthNotice('Signed in successfully.');
-        setAuthForm({ name: '', email: '', password: '' });
+        setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
         setPage('app');
         setDashboardView('overview');
         return;
@@ -3572,7 +3678,7 @@ function App() {
       setPage('app');
       setDashboardView('overview');
       setAuthNotice('Account created successfully.');
-      setAuthForm({ name: '', email: '', password: '' });
+      setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
       return;
     }
 
@@ -3588,7 +3694,7 @@ function App() {
     setPage('app');
     setDashboardView('overview');
     setAuthNotice('Signed in successfully.');
-    setAuthForm({ name: '', email: '', password: '' });
+    setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
   };
 
   const handleLogout = async () => {
@@ -3616,17 +3722,15 @@ function App() {
       return;
     }
 
-    const user = await signInWithGoogle(authRole, formatUiRole(selectedUiRole));
-    const profile = await fbGetUserProfile(user.uid);
-    const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
-    const role = (profile?.role as Role) || authRole;
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        GOOGLE_AUTH_PENDING_KEY,
+        JSON.stringify({ role: authRole, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) })
+      );
+    }
 
-    setProfileCache(user.uid, { name, displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole) });
-    setSession({ uid: user.uid, name, email: user.email || '', role, uiRole: selectedUiRole, displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole) });
-    setPage('app');
-    setDashboardView('overview');
-    setAuthNotice('Signed in with Google successfully.');
-    setAuthForm({ name: '', email: '', password: '' });
+    setAuthNotice('Redirecting to Google sign-in...');
+    await signInWithGoogle();
   };
 
   const mobileNavItems = session ? NAV_ITEMS[session.role] : [];
