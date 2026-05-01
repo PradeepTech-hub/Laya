@@ -2235,6 +2235,13 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const shownExpiredNotifications = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const detectPickupLocation = () => {
     if (!navigator.geolocation) {
@@ -2263,6 +2270,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
 
   const myDeliveries = deliveries.filter((delivery) => delivery.donorId === session.email);
   const myDonations = donations.filter((donation) => donation.donorId === session.email);
+  const myActiveDonations = myDonations.filter((donation) => donation.status === 'pending' || donation.status === 'assigned');
   const donorCoordinates = toCoordinates(form.pickupLat, form.pickupLng);
   const needsMap = needs.reduce<Record<string, NeedRecord>>((accumulator, need) => {
     accumulator[need.id] = need;
@@ -2288,6 +2296,16 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
         const addr = donation.assignedNeedId ? (needsMap[donation.assignedNeedId]?.location.address || donation.assignedNeedId) : 'an NGO';
         setNotice(`✅ Matched to ${addr}`);
         shownAssignedNotifications.current.add(donation.id);
+      }
+
+      if (
+        prev !== 'expired' &&
+        donation.status === 'expired' &&
+        donation.notificationEnabled &&
+        !shownExpiredNotifications.current.has(donation.id)
+      ) {
+        setNotice('⚠ Your food donation has expired and is no longer available for delivery.');
+        shownExpiredNotifications.current.add(donation.id);
       }
 
       prevDonationStatusRef.current[donation.id] = donation.status;
@@ -2459,38 +2477,49 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
         </form>
       </div>
 
-      <div className="donor-glass-panel p-8">
-        <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">My Donations</p>
-        <h2 className="text-xl font-black text-slate-800 mb-4">Your donations</h2>
+      <div className="w-full rounded-[2rem] border border-white/80 bg-white/90 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+        <SectionTitle eyebrow="My Donations" title="Your donations" text="See pending donations and their match status. Cancel a pending donation anytime." />
+        <p className="mt-3 text-sm text-slate-500">Active donations: {myActiveDonations.length} (pending or matched)</p>
 
-        <div className="space-y-3">
+        <div className="mt-4 space-y-3">
           {myDonations.length === 0 ? (
             <div className="rounded-3xl border border-white/60 bg-white/30 backdrop-blur p-8 text-center">
               <p className="text-2xl mb-2">🍱</p>
               <p className="text-sm font-medium text-slate-500">No donations yet — add your first above.</p>
             </div>
           ) : (
-            myDonations.map((donation) => (
-              <div key={donation.id} className="rounded-2xl border border-white/50 bg-white/60 backdrop-blur px-5 py-4 text-sm">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="font-semibold text-slate-900">{donation.foodType}</p>
-                    <p className="mt-1 text-slate-600">Quantity: {donation.quantity}</p>
-                    <p className="mt-1 text-xs text-slate-500">Pickup: {donation.location.address}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-medium text-slate-700">{donation.status}</p>
-                    {donation.status === 'pending' ? (
-                      <p className="text-xs text-slate-500">Waiting for match</p>
-                    ) : donation.status === 'assigned' ? (
-                      <p className="text-xs text-slate-500">Matched to: {donation.assignedNeedId ? (needsMap[donation.assignedNeedId]?.location.address || donation.assignedNeedId) : 'Assigned'}</p>
-                    ) : donation.status === 'expired' ? (
-                      <p className="text-xs text-rose-600">Expired</p>
-                    ) : null}
-                  </div>
-                </div>
+            myDonations.map((donation) => {
+              const isExpired = donation.status === 'expired';
+              const timeLeftMinutes = Math.max(0, Math.round((donation.expiryTime - now) / (1000 * 60)));
+              const expiryLabel = isExpired
+                ? `Expired at ${new Date(donation.expiryTime).toLocaleTimeString()}`
+                : `Expires in ${timeLeftMinutes > 0 ? `${timeLeftMinutes} min` : 'less than 1 min'}`;
 
-                <div className="mt-3 flex items-center justify-between">
+              return (
+                <div
+                  key={donation.id}
+                  className={`rounded-2xl border p-3 text-sm ${isExpired ? 'border-slate-200 bg-slate-100 text-slate-500 opacity-80' : 'border-slate-200 bg-slate-50 text-slate-900'}`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">{donation.foodType}</p>
+                      <p className="mt-1 text-slate-600">Quantity: {donation.quantity}</p>
+                      <p className="mt-1 text-xs text-slate-500">Pickup: {donation.location.address}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-sm font-medium ${isExpired ? 'text-rose-700' : 'text-slate-700'}`}>{donation.status === 'expired' ? 'Expired ❌' : donation.status}</p>
+                      {donation.status === 'pending' ? (
+                        <p className="text-xs text-slate-500">Waiting for match</p>
+                      ) : donation.status === 'assigned' ? (
+                        <p className="text-xs text-slate-500">Matched to: {donation.assignedNeedId ? (needsMap[donation.assignedNeedId]?.location.address || donation.assignedNeedId) : 'Assigned'}</p>
+                      ) : donation.status === 'expired' ? (
+                        <p className="text-xs text-rose-600">Expired</p>
+                      ) : null}
+                      <p className="mt-1 text-xs text-slate-400">{expiryLabel}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between">
                   <div className="text-xs text-slate-500">Created: {new Date(donation.createdAt).toLocaleString()}</div>
                   <div>
                     {donation.status === 'pending' ? (
@@ -2512,7 +2541,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
                   </div>
                 </div>
               </div>
-            ))
+            )})
           )}
         </div>
 

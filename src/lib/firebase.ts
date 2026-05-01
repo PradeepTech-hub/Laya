@@ -494,8 +494,18 @@ export function listenToDonations(callback: (donations: DonationRecord[]) => voi
 
     remoteUnsub = onSnapshot(
       q,
-      (snapshot) => {
+      async (snapshot) => {
         const items = snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<DonationRecord, 'id'>) }));
+        for (const donation of items) {
+          if (checkDonationExpiry(donation)) {
+            try {
+              await expireRemoteDonation(donation);
+              donation.status = 'expired';
+            } catch (error) {
+              console.warn('[LAYA] Failed to expire donation during donation listener:', error);
+            }
+          }
+        }
         writeLocal(LOCAL_KEYS.donations, items);
         callback(items);
       },
@@ -615,6 +625,69 @@ function pickBestDonationForNeed(need: NeedRecord, donations: DonationRecord[]) 
   return scored[0].donation;
 }
 
+export function checkDonationExpiry(donation: DonationRecord) {
+  return donation.status !== 'completed' && donation.status !== 'expired' && donation.status !== 'cancelled' && donation.expiryTime <= Date.now();
+}
+
+async function expireRemoteDonation(donation: DonationRecord) {
+  const firestore = getFirestoreDbOrThrow();
+  const donationRef = doc(firestore, 'donations', donation.id);
+
+  await runTransaction(firestore, async (tx) => {
+    const donationSnap = await tx.get(donationRef);
+    if (!donationSnap.exists()) return;
+
+    const currentDonation = donationSnap.data() as Omit<DonationRecord, 'id'>;
+    if (!checkDonationExpiry({ id: donation.id, ...currentDonation })) return;
+
+    const deliveryQuery = query(collection(firestore, 'deliveries'), where('donationId', '==', donation.id));
+    const deliverySnapshot = await getDocs(deliveryQuery);
+    const hasInTransit = deliverySnapshot.docs.some((docSnap) => {
+      const delivery = docSnap.data() as Omit<DeliveryRecord, 'id'>;
+      return delivery.status === 'in_transit';
+    });
+
+    if (hasInTransit) {
+      return;
+    }
+
+    tx.update(donationRef, { status: 'expired' } as DocumentData);
+
+    if (currentDonation.assignedNeedId) {
+      const needRef = doc(firestore, 'needs', currentDonation.assignedNeedId);
+      const needSnap = await tx.get(needRef);
+      if (needSnap.exists()) {
+        const needData = needSnap.data() as Omit<NeedRecord, 'id'>;
+        if (needData.status === 'assigned') {
+          tx.update(needRef, { status: 'open' } as DocumentData);
+        }
+      }
+    }
+
+    deliverySnapshot.docs.forEach((deliveryDoc) => {
+      const delivery = deliveryDoc.data() as Omit<DeliveryRecord, 'id'>;
+      if (delivery.status !== 'delivered' && delivery.status !== 'cancelled' && delivery.status !== 'in_transit') {
+        tx.update(deliveryDoc.ref, { status: 'cancelled' } as DocumentData);
+      }
+    });
+  });
+}
+
+function expireLocalDonation(donation: DonationRecord, donations: DonationRecord[], needs: NeedRecord[], deliveries: DeliveryRecord[]) {
+  donation.status = 'expired';
+  const delivery = deliveries.find((item) => item.donationId === donation.id && item.status !== 'delivered' && item.status !== 'cancelled');
+  if (delivery && delivery.status !== 'in_transit') {
+    delivery.status = 'cancelled';
+  }
+
+  if (donation.assignedNeedId) {
+    const need = needs.find((item) => item.id === donation.assignedNeedId);
+    if (need && need.status === 'assigned') {
+      need.status = 'open';
+    }
+  }
+}
+
 function runLocalMatchingPass() {
   const now = Date.now();
   const donations = readLocalDonations();
@@ -623,13 +696,16 @@ function runLocalMatchingPass() {
   let changed = false;
 
   for (const donation of donations) {
-    if (donation.status !== 'pending') continue;
+    if (checkDonationExpiry(donation)) {
+      const inTransitDelivery = deliveries.find((item) => item.donationId === donation.id && item.status === 'in_transit');
+      if (inTransitDelivery) continue;
 
-    if (donation.expiryTime <= now) {
-      donation.status = 'expired';
+      expireLocalDonation(donation, donations, needs, deliveries);
       changed = true;
       continue;
     }
+
+    if (donation.status !== 'pending') continue;
 
     const existingDelivery = deliveries.find((delivery) => delivery.donationId === donation.id && delivery.status !== 'delivered');
     if (existingDelivery) continue;
@@ -807,11 +883,11 @@ export function startMatchingEngine() {
       async (snapshot) => {
         for (const docSnap of snapshot.docs) {
           const donation = { id: docSnap.id, ...(docSnap.data() as Omit<DonationRecord, 'id'>) } as DonationRecord;
-          if (donation.expiryTime <= Date.now()) {
+          if (checkDonationExpiry(donation)) {
             try {
-              await updateDoc(doc(firestore, 'donations', donation.id), { status: 'expired' } as DocumentData);
+              await expireRemoteDonation(donation);
             } catch (error) {
-              console.warn('[LAYA] Failed to mark donation expired:', error);
+              console.warn('[LAYA] Failed to expire donation:', error);
             }
             continue;
           }
