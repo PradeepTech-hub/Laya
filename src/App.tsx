@@ -365,10 +365,6 @@ function calculateDistanceKm(a: Coordinates | null, b: Coordinates | null) {
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
-function generateOtp() {
-  return String(Math.floor(1000 + Math.random() * 9000));
-}
-
 function openGoogleMapsRoute(destination: Coordinates) {
   if (typeof window === 'undefined') {
     return;
@@ -1670,7 +1666,6 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
       const selectedNeed = selectBestNeedByScore(needs.filter((need) => need.status === 'open'), pickupCoordinates, form.mealType, form.category, expiryTimeStamp);
 
       if (selectedNeed) {
-        const otp = generateOtp();
         // mark donation assigned
         await updateDonation(donationId, { status: 'assigned', assignedNeedId: selectedNeed.id });
 
@@ -1693,7 +1688,6 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
           category: form.category,
           quantity: form.quantity,
           status: 'pending',
-          otp,
         });
 
         await updateNeed(selectedNeed.id, { status: 'assigned' });
@@ -1861,7 +1855,6 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
 }
 
 function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
-  const [otpInputs, setOtpInputs] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const currentUserId = session.uid || session.email;
   const needsById = needs.reduce<Record<string, NeedRecord>>((accumulator, need) => {
@@ -1918,13 +1911,6 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
   const updateStatus = async (delivery: DeliveryRecord, nextStatus: 'accepted' | 'picked' | 'in_transit' | 'delivered') => {
     try {
       if (nextStatus === 'delivered') {
-        const otp = otpInputs[delivery.id] || window.prompt('Enter OTP to complete the delivery') || '';
-
-        if (otp !== delivery.otp) {
-          setNotice('OTP does not match. Delivery blocked.');
-          return;
-        }
-
         await updateDelivery(delivery.id, { status: 'delivered', agentId: currentUserId, deliveredAt: Date.now() });
         await updateDonation(delivery.donationId, { status: 'completed' });
         await updateNeed(delivery.needId, { status: 'fulfilled' });
@@ -2023,18 +2009,9 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
                       ) : null}
 
                       {delivery.status === 'in_transit' ? (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={otpInputs[delivery.id] || ''}
-                            onChange={(event) => setOtpInputs((current) => ({ ...current, [delivery.id]: event.target.value }))}
-                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
-                            placeholder="Enter OTP"
-                          />
-                          <button type="button" onClick={() => updateStatus(delivery, 'delivered')} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
-                            Mark Delivered
-                          </button>
-                        </div>
+                        <button type="button" onClick={() => updateStatus(delivery, 'delivered')} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
+                          Mark Delivered
+                        </button>
                       ) : null}
                     </>
                   ) : null}
@@ -2405,10 +2382,6 @@ function ShipmentCard({ delivery }: { delivery: DeliveryRecord }) {
           <Clock3 size={14} />
           {delivery.quantity ? `${delivery.quantity}` : 'Quantity not set'}
         </span>
-        <span className="inline-flex items-center gap-2">
-          <ShieldCheck size={14} />
-          OTP ending {delivery.otp.slice(-2)}
-        </span>
       </div>
 
       <div className="mt-4">
@@ -2424,14 +2397,26 @@ function BikeTracker({ delivery }: { delivery: DeliveryRecord }) {
   const dest = { lat: delivery.dropLocation.lat, lng: delivery.dropLocation.lng };
   const agentLocation = (delivery as unknown as { agentLocation?: { lat: number; lng: number } }).agentLocation;
 
-  const current = agentLocation ? { lat: agentLocation.lat, lng: agentLocation.lng } : start;
+  const statusIndex = steps.indexOf(delivery.status as DeliveryStatus);
+  const statusProgress = statusIndex >= 0 ? statusIndex / Math.max(1, steps.length - 1) : 0;
+  const current = delivery.status === 'delivered'
+    ? dest
+    : agentLocation
+      ? { lat: agentLocation.lat, lng: agentLocation.lng }
+      : start;
+
   const totalKm = calculateDistanceKm(start, dest) || 0.0001;
   const coveredKm = calculateDistanceKm(start, current);
   let progress = Math.max(0, Math.min(1, coveredKm / totalKm));
 
-  const statusIndex = steps.indexOf(delivery.status as DeliveryStatus);
-  if (!agentLocation && statusIndex >= 0) {
-    progress = statusIndex / Math.max(1, steps.length - 1);
+  if (!agentLocation) {
+    progress = statusProgress;
+  } else {
+    progress = Math.max(progress, statusProgress);
+  }
+
+  if (delivery.status === 'delivered') {
+    progress = 1;
   }
 
   return (

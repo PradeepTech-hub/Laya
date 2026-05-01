@@ -90,7 +90,6 @@ type DeliveryRecord = {
   quantity?: string;
   status: 'pending' | 'accepted' | 'picked' | 'in_transit' | 'delivered';
   deliveredAt?: number;
-  otp: string;
   createdAt: number;
 };
 
@@ -664,7 +663,6 @@ function runLocalMatchingPass() {
       category: donation.category,
       quantity: donation.quantity,
       status: 'pending',
-      otp: String(Math.floor(1000 + Math.random() * 9000)),
       createdAt: Date.now(),
     });
 
@@ -775,7 +773,6 @@ async function assignMatchTransaction(donationId: string, needId: string) {
         category: donation.category,
         quantity: donation.quantity,
         status: 'pending',
-        otp,
         createdAt: Date.now(),
       } as DocumentData);
     });
