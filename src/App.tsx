@@ -3411,6 +3411,7 @@ function App() {
   const [donations, setDonations] = useState<DonationRecord[]>(EMPTY_DONATIONS);
   const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(EMPTY_DELIVERIES);
   const [isOffline, setIsOffline] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -3452,21 +3453,50 @@ function App() {
     if (!useFirebase || !isFirebaseConfigured()) return;
 
     const unsub = fbOnAuthStateChanged(async (user) => {
+      setAuthLoading(true);
       if (!user) {
         setSession(null);
         setPage('landing');
+        setAuthLoading(false);
         return;
       }
 
       try {
+        console.log("User:", user);
         const profile = await fbGetUserProfile(user.uid);
+        console.log("Fetched profile:", profile);
         const pendingGoogleAuth = typeof window !== 'undefined' ? window.localStorage.getItem(GOOGLE_AUTH_PENDING_KEY) : null;
         const pendingAuth = pendingGoogleAuth ? (JSON.parse(pendingGoogleAuth) as { role?: Role; uiRole?: UiRole; displayRoleLabel?: string } | null) : null;
-        const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
-        const role = (profile?.role as Role) || pendingAuth?.role || 'customer';
-        const uiRole = (profile?.uiRole as UiRole) || pendingAuth?.uiRole || (profile?.displayRoleLabel === 'Volunteer' ? 'volunteer' : profile?.displayRoleLabel === 'NGO' ? 'ngo' : 'donor');
-        const displayRoleLabel = profile?.displayRoleLabel || pendingAuth?.displayRoleLabel;
+        const storedSession = typeof window !== 'undefined' ? window.localStorage.getItem(SESSION_KEY) : null;
+        const fallbackSession = storedSession ? (JSON.parse(storedSession) as Session) : null;
+        const cachedSession = fallbackSession && fallbackSession.uid === user.uid ? fallbackSession : null;
 
+        const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
+        const role = (profile?.role as Role) || pendingAuth?.role || cachedSession?.role;
+        const uiRole = (profile?.uiRole as UiRole) || pendingAuth?.uiRole || cachedSession?.uiRole;
+        const displayRoleLabel = profile?.displayRoleLabel || pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel || (uiRole ? formatUiRole(uiRole) : undefined);
+
+        console.log("Role:", role, "uiRole:", uiRole, "displayRoleLabel:", displayRoleLabel);
+
+        if (!role || !uiRole) {
+          console.error("User role not found for authenticated user", { profile, pendingAuth, cachedSession });
+          setSession(null);
+          setPage('auth');
+          setAuthLoading(false);
+          return;
+        }
+
+        if (!profile || !profile.role || !profile.uiRole || !profile.displayRoleLabel) {
+          await fbSetUserProfile(user.uid, {
+            name,
+            email: user.email || '',
+            role,
+            uiRole,
+            displayRoleLabel,
+          });
+        }
+
+        console.log("Setting session with uiRole:", uiRole);
         setSession({ uid: user.uid, name, email: user.email || '', role, uiRole, displayRoleLabel });
         setPage('app');
         setDashboardView('overview');
@@ -3474,22 +3504,41 @@ function App() {
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(GOOGLE_AUTH_PENDING_KEY);
         }
-      } catch {
+      } catch (error) {
+        console.error("Error in onAuthStateChanged:", error);
         const pendingGoogleAuth = typeof window !== 'undefined' ? window.localStorage.getItem(GOOGLE_AUTH_PENDING_KEY) : null;
         const pendingAuth = pendingGoogleAuth ? (JSON.parse(pendingGoogleAuth) as { role?: Role; uiRole?: UiRole; displayRoleLabel?: string } | null) : null;
+        const storedSession = typeof window !== 'undefined' ? window.localStorage.getItem(SESSION_KEY) : null;
+        const fallbackSession = storedSession ? (JSON.parse(storedSession) as Session) : null;
+        const cachedSession = fallbackSession && fallbackSession.uid === user.uid ? fallbackSession : null;
+        const role = pendingAuth?.role || cachedSession?.role;
+        const uiRole = pendingAuth?.uiRole || cachedSession?.uiRole;
+        const displayRoleLabel = pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel;
+
+        if (!role || !uiRole) {
+          setSession(null);
+          setPage('auth');
+          if (typeof window !== 'undefined') {
+            window.localStorage.removeItem(GOOGLE_AUTH_PENDING_KEY);
+          }
+          setAuthLoading(false);
+          return;
+        }
+
         setSession({
           uid: user.uid,
           name: user.displayName || user.email?.split('@')[0] || 'User',
           email: user.email || '',
-          role: pendingAuth?.role || 'customer',
-          uiRole: pendingAuth?.uiRole || 'donor',
-          displayRoleLabel: pendingAuth?.displayRoleLabel,
+          role,
+          uiRole,
+          displayRoleLabel,
         });
         setPage('app');
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(GOOGLE_AUTH_PENDING_KEY);
         }
       }
+      setAuthLoading(false);
     });
 
     return () => unsub();
@@ -3638,7 +3687,12 @@ function App() {
 
         // signin
         const user = await fbSignInWithEmail(email, authForm.password);
-        await fbSetUserProfile(user.uid, { displayRoleLabel: formatUiRole(selectedUiRole) });
+        await fbSetUserProfile(user.uid, {
+          displayRoleLabel: formatUiRole(selectedUiRole),
+          uiRole: selectedUiRole,
+          role: authRole,
+          name: name || email.split('@')[0],
+        });
         const profile = await fbGetUserProfile(user.uid);
         setProfileCache(user.uid, {
           name: profile?.name || user.displayName || email.split('@')[0] || 'User',
@@ -3722,6 +3776,7 @@ function App() {
       return;
     }
 
+    console.log('Starting Google sign-in for:', selectedUiRole);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(
         GOOGLE_AUTH_PENDING_KEY,
@@ -3741,6 +3796,14 @@ function App() {
       {isOffline && (
         <div className="sticky top-0 z-50 w-full border-b-2 border-amber-400 bg-amber-50 px-4 py-3 text-center text-sm font-semibold text-amber-900 shadow-md sm:px-6">
           🔌 Offline Mode: Your data is stored locally and will sync when Firestore is available.
+        </div>
+      )}
+      {authLoading && !session && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-sm">
+          <div className="text-center">
+            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-cyan-200 border-t-cyan-600"></div>
+            <p className="mt-4 text-sm font-semibold text-slate-600">Loading dashboard...</p>
+          </div>
         </div>
       )}
       {page === 'auth' && (

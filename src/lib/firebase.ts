@@ -3,10 +3,13 @@ import {
   getAuth,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithPopup,
+  signInWithRedirect,
+  setPersistence,
+  browserLocalPersistence,
   signOut as fbSignOut,
   onAuthStateChanged as fbOnAuthStateChanged,
   GoogleAuthProvider,
-  signInWithRedirect,
   type User as FirebaseUser,
 } from 'firebase/auth';
 import {
@@ -162,6 +165,16 @@ function isFirestoreUnavailableError(error: unknown): boolean {
   );
 }
 
+async function ensurePersistence() {
+  if (!isFirebaseConfigured() || !auth) return;
+
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch (error) {
+    console.warn('[LAYA] Firebase auth persistence setup failed:', error);
+  }
+}
+
 function init() {
   if (!isConfigured()) return;
   if (getApps().length > 0) return;
@@ -297,6 +310,7 @@ export async function signUpWithEmail(
   profileImageUrl?: string
 ) {
   if (!isFirebaseConfigured()) throw new Error('Firebase not configured');
+  await ensurePersistence();
 
   const userCredential = await createUserWithEmailAndPassword(auth!, email, password);
   const uid = userCredential.user.uid;
@@ -327,6 +341,7 @@ export async function signUpWithEmail(
 
 export async function signInWithEmail(email: string, password: string) {
   if (!isFirebaseConfigured()) throw new Error('Firebase not configured');
+  await ensurePersistence();
 
   const userCredential = await signInWithEmailAndPassword(auth!, email, password);
   return userCredential.user;
@@ -400,9 +415,17 @@ export async function getAgentDetails(agentId: string) {
 
 export async function signInWithGoogle(): Promise<void> {
   if (!isFirebaseConfigured()) throw new Error('Firebase not configured');
+  await ensurePersistence();
 
+  console.log('[LAYA] Firebase Google sign-in initiated');
   const provider = new GoogleAuthProvider();
-  await signInWithRedirect(auth!, provider);
+
+  try {
+    await signInWithPopup(auth!, provider);
+  } catch (error) {
+    console.warn('[LAYA] signInWithPopup failed, falling back to redirect:', error);
+    await signInWithRedirect(auth!, provider);
+  }
 }
 
 export function listenToNeeds(callback: (needs: NeedRecord[]) => void) {
