@@ -22,11 +22,13 @@ import {
   Truck,
   UserRound,
   Search,
-  Zap,
   Box,
+  X,
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { MapContainer, TileLayer, CircleMarker, Polyline, Popup } from 'react-leaflet';
+import { DynamicOptimizationMap } from './components/DynamicOptimizationMap';
+import { motion } from 'framer-motion';
 import {
   isFirebaseConfigured,
   signUpWithEmail,
@@ -1339,6 +1341,20 @@ function NgoOverview({ session, needs, deliveries }: { session: Session; needs: 
             </p>
           </div>
         </div>
+
+        {ongoingDeliveries > 0 && deliveries.filter(d => d.status !== 'delivered')[0] && (
+          <div className="mt-8">
+            <DynamicOptimizationMap 
+              source={{ lat: deliveries.find(d => d.status !== 'delivered')?.pickupLocation?.lat || 0, lng: deliveries.find(d => d.status !== 'delivered')?.pickupLocation?.lng || 0 }}
+              destination={{ lat: deliveries.find(d => d.status !== 'delivered')?.dropLocation?.lat || 0, lng: deliveries.find(d => d.status !== 'delivered')?.dropLocation?.lng || 0 }}
+            />
+          </div>
+        )}
+
+        <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          <p className="font-semibold text-slate-900">{session.name}</p>
+          <p className="mt-1">Post a new need from the Requests tab, then track all open beneficiary requests from Live Needs.</p>
+        </div>
       </div>
 
       <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1390,14 +1406,14 @@ function computeFullMatchScore(need: NeedRecord, donorLat?: number, donorLng?: n
   const b: MatchScoreBreakdown = { urgency: 0, timeDecay: 0, distance: 0, capacity: 0, foodCompat: 0, feasibility: 0, total: 0 };
   b.urgency = need.urgency === 'high' ? 20 : need.urgency === 'medium' ? 12 : 5;
   if (expiryMs) { const h = (expiryMs - Date.now()) / 3_600_000; b.timeDecay = h < 0 ? 0 : h < 1 ? 20 : h < 2 ? 16 : h < 4 ? 10 : 5; } else { b.timeDecay = 8; }
-  if (donorLat && donorLng && need.location.lat && need.location.lng) { const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng); b.distance = d < 2 ? 20 : d < 5 ? 16 : d < 10 ? 12 : d < 15 ? 8 : d < 25 ? 4 : 1; } else { b.distance = 10; }
+  if (donorLat && donorLng && need.location?.lat && need.location?.lng) { const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng); b.distance = d < 2 ? 20 : d < 5 ? 16 : d < 10 ? 12 : d < 15 ? 8 : d < 25 ? 4 : 1; } else { b.distance = 10; }
   const ppl = parseInt(String(need.peopleCount)) || 0; const serv = donorServings || 0;
   if (serv > 0 && ppl > 0) { const ratio = serv / ppl; b.capacity = ratio >= 1 ? 15 : ratio >= 0.5 ? 10 : 5; } else { b.capacity = ppl > 100 ? 15 : ppl > 50 ? 10 : ppl > 20 ? 7 : 4; }
   const nM = (need.mealType || 'any').toLowerCase(); const dM = (donorMealType || 'any').toLowerCase();
   const nC = (need.category || 'any').toLowerCase(); const dC = (donorCategory || 'any').toLowerCase();
   let compat = 0; if (dM === 'any' || nM === 'any' || dM === nM) compat += 8; else compat += 2;
   if (dC === 'any' || nC === 'any' || dC === nC) compat += 7; else compat += 1; b.foodCompat = compat;
-  if (donorLat && donorLng && need.location.lat && need.location.lng) { const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng); const hLeft = expiryMs ? (expiryMs - Date.now()) / 3_600_000 : 4; b.feasibility = (d / 30 < hLeft) ? (d < 5 ? 10 : d < 15 ? 7 : 4) : 0; } else { b.feasibility = 5; }
+  if (donorLat && donorLng && need.location?.lat && need.location?.lng) { const d = haversineKm(donorLat, donorLng, need.location.lat, need.location.lng); const hLeft = expiryMs ? (expiryMs - Date.now()) / 3_600_000 : 4; b.feasibility = (d / 30 < hLeft) ? (d < 5 ? 10 : d < 15 ? 7 : 4) : 0; } else { b.feasibility = 5; }
   b.total = Math.min(100, b.urgency + b.timeDecay + b.distance + b.capacity + b.foodCompat + b.feasibility);
   return b;
 }
@@ -1456,7 +1472,7 @@ function AutoMatchModal({ needs, donations, session, onClose, onMatchComplete }:
     timers.push(setTimeout(() => {
       const scored: MatchResult[] = openNeeds.map((n) => {
         const bd = computeFullMatchScore(n, donorPos?.lat, donorPos?.lng, expMs, mealType, category, parseInt(quantity) || 0);
-        return { need: n, score: bd.total, breakdown: bd, distKm: donorPos && n.location.lat && n.location.lng ? haversineKm(donorPos.lat, donorPos.lng, n.location.lat, n.location.lng) : null };
+        return { need: n, score: bd.total, breakdown: bd, distKm: donorPos && n.location?.lat && n.location?.lng ? haversineKm(donorPos.lat, donorPos.lng, n.location.lat, n.location.lng) : null };
       }).filter((m) => m.breakdown.feasibility > 0 || !donorPos).sort((a, b) => b.score - a.score).slice(0, 5);
       setMatches(scored);
       setScanStep(5);
@@ -1482,7 +1498,7 @@ function AutoMatchModal({ needs, donations, session, onClose, onMatchComplete }:
       await createDelivery({
         donorId: session.email, donorName: session.name, ngoId: m.need.ngoId, agentId: null, donationId,
         pickupLocation: { address: pickupLocation || 'Auto-detected', lat: donorPos?.lat ?? 0, lng: donorPos?.lng ?? 0 },
-        dropLocation: m.need.location, needId: m.need.id, agentLocation: null,
+        dropLocation: m.need.location || { address: 'Unknown', lat: 0, lng: 0 }, needId: m.need.id, agentLocation: null,
         foodType, mealType: mealType as MealType, category: category as FoodCategory, quantity, status: 'pending',
       });
       setRouteStatus('Updating need status...');
@@ -1574,7 +1590,7 @@ function AutoMatchModal({ needs, donations, session, onClose, onMatchComplete }:
                               <span className="text-xs font-bold text-slate-500 uppercase">{m.need.urgency} urgency</span>
                             </div>
                             <p className="font-black text-slate-800 mt-1">{m.need.foodType || 'Food needed'}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">{m.need.location.address} - {m.need.peopleCount} people</p>
+                            <p className="text-xs text-slate-500 mt-0.5">{m.need.location?.address || 'Unknown'} - {m.need.peopleCount} people</p>
                             {m.distKm !== null && <p className="text-xs text-[#5D8FCB] font-bold mt-0.5">{m.distKm.toFixed(1)} km away</p>}
                           </div>
                           <div className="text-right shrink-0">
@@ -1618,7 +1634,7 @@ function AutoMatchModal({ needs, donations, session, onClose, onMatchComplete }:
             <div className="animate-fade-slide text-center py-8">
               <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-emerald-100 flex items-center justify-center text-4xl">{'\u2705'}</div>
               <h3 className="text-2xl font-black text-emerald-700">Match Confirmed!</h3>
-              <p className="text-sm text-slate-600 mt-2">Your <strong>{foodType}</strong> ({quantity} servings) is matched to <strong>{matches[selectedIdx]?.need.location.address}</strong></p>
+              <p className="text-sm text-slate-600 mt-2">Your <strong>{foodType}</strong> ({quantity} servings) is matched to <strong>{matches[selectedIdx]?.need.location?.address || 'Unknown'}</strong></p>
               <div className="mt-4 grid grid-cols-3 gap-2 max-w-xs mx-auto text-xs">
                 <div className="bg-white/60 rounded-xl p-2"><p className="font-black text-emerald-600">{matches[selectedIdx]?.score}%</p><p className="text-slate-500">Score</p></div>
                 <div className="bg-white/60 rounded-xl p-2"><p className="font-black text-blue-600">{matches[selectedIdx]?.distKm?.toFixed(1) || '?'} km</p><p className="text-slate-500">Distance</p></div>
@@ -2886,6 +2902,7 @@ function VolunteerActiveDeliveryPanel({ session, deliveries, compact = false }: 
             })}
           </div>
 
+
           <div className="donor-glass-card p-6">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Route Info</p>
             <div className="flex flex-col gap-4">
@@ -2920,6 +2937,13 @@ function VolunteerActiveDeliveryPanel({ session, deliveries, compact = false }: 
           <div className="donor-glass-card p-6 flex flex-col justify-center">
             <DecayTimer initialMinutes={120 - Math.floor((Date.now() - activeDelivery.createdAt)/60000)} />
           </div>
+        </div>
+
+        <div className="mt-6">
+          <DynamicOptimizationMap 
+            source={{ lat: activeDelivery?.pickupLocation?.lat || 0, lng: activeDelivery?.pickupLocation?.lng || 0 }}
+            destination={{ lat: activeDelivery?.dropLocation?.lat || 0, lng: activeDelivery?.dropLocation?.lng || 0 }}
+          />
         </div>
       </div>
     </div>
@@ -3021,6 +3045,15 @@ function TrackingPanel({ session, donations, deliveries }: { session: Session; d
           </div>
         ))}
       </div>
+
+      {myDeliveries.filter(d => d.status !== 'delivered').length > 0 && (
+        <div className="mb-8">
+          <DynamicOptimizationMap 
+            source={{ lat: myDeliveries.filter(d => d.status !== 'delivered')[0]?.pickupLocation?.lat || 0, lng: myDeliveries.filter(d => d.status !== 'delivered')[0]?.pickupLocation?.lng || 0 }}
+            destination={{ lat: myDeliveries.filter(d => d.status !== 'delivered')[0]?.dropLocation?.lat || 0, lng: myDeliveries.filter(d => d.status !== 'delivered')[0]?.dropLocation?.lng || 0 }}
+          />
+        </div>
+      )}
 
       <div className="space-y-3">
         {myDeliveries.length > 0 ? myDeliveries.map((delivery) => (
