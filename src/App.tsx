@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import DonorDashboard from './components/DonorDashboard';
+import AIAssist from './components/AIAssist';
 import L from 'leaflet';
 import {
   ArrowRight,
@@ -2457,12 +2458,36 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
     }
   };
 
+  const setFood = (value: string) => setForm((current) => ({ ...current, foodType: value }));
+  const setQuantity = (value: string) => setForm((current) => ({ ...current, quantity: value }));
+  const setLocation = (value: string) => setForm((current) => ({ ...current, pickupLocation: value }));
+  const setExpiry = (value: string) => {
+    if (value === 'within-1-hour' || value === 'within-2-hours' || value === 'within-4-hours' || value === 'today') {
+      setForm((current) => ({ ...current, expiryTime: value }));
+    }
+  };
+
+  const handleAutoFill = async () => {
+    if (form.foodType.trim() && form.quantity.trim()) {
+      const event = new Event('submit', { bubbles: true, cancelable: true });
+      const formElement = document.querySelector('form[data-donation-form]') as HTMLFormElement;
+      if (formElement) {
+        formElement.dispatchEvent(event);
+      }
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <div className="donor-glass-panel p-8 animate-fade-slide">
-        <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Donate Food</p>
-        <h2 className="text-2xl font-black text-slate-800 mb-6">Match surplus before it expires</h2>
-        <form onSubmit={submitDonation} className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Donate Food</p>
+            <h2 className="text-2xl font-black text-slate-800">Match surplus before it expires</h2>
+          </div>
+          <AIAssist setFood={setFood} setQuantity={setQuantity} setLocation={setLocation} setExpiry={setExpiry} onAutoFill={handleAutoFill} />
+        </div>
+        <form onSubmit={submitDonation} data-donation-form className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
           <SimpleInput label="Food Type" value={form.foodType} onChange={(value) => setForm({ ...form, foodType: value })} placeholder="Prepared meals, bread, groceries" />
           <label className="block">
             <span className="mb-2 block text-sm font-semibold text-slate-800">Meal Type</span>
