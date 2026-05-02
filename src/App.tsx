@@ -21,14 +21,11 @@ import {
   Sparkles,
   Truck,
   UserRound,
-  Search,
-  Box,
   X,
+  Zap,
 } from 'lucide-react';
-import QRCode from 'react-qr-code';
 import { MapContainer, TileLayer, CircleMarker, Polyline, Popup } from 'react-leaflet';
 import { DynamicOptimizationMap } from './components/DynamicOptimizationMap';
-import { motion } from 'framer-motion';
 import {
   isFirebaseConfigured,
   signUpWithEmail,
@@ -37,7 +34,6 @@ import {
   onAuthStateChanged as fbOnAuthStateChanged,
   getUserProfile as fbGetUserProfile,
   setUserProfile as fbSetUserProfile,
-  getAgentDetails as fbGetAgentDetails,
   signInWithGoogle,
   listenToNeeds,
   listenToDonations,
@@ -56,7 +52,6 @@ import {
   type DeliveryRecord as FirestoreDeliveryRecord,
 } from './lib/firebase';
 import { getRouteDistanceAndTime, type RouteResult } from './lib/routing';
-import { getDecayCategory, calculateDecayProbability, calculateDecayAwareCost, getRoutingDecision } from './lib/engine';
 
 type Role = 'customer' | 'delivery-agent';
 type AuthMode = 'signin' | 'signup';
@@ -241,12 +236,6 @@ const EXPIRY_TIME_OPTIONS: { value: 'within-1-hour' | 'within-2-hours' | 'within
   { value: 'within-2-hours', label: 'Within 2 hours' },
   { value: 'within-4-hours', label: 'Within 4 hours' },
   { value: 'today', label: 'Today' },
-];
-
-const CUSTOMER_METRICS = [
-  { icon: <Package size={22} className="text-emerald-600" />, value: '12.5K', label: 'Meals Donated', accent: 'bg-emerald-50' },
-  { icon: <Truck size={22} className="text-cyan-600" />, value: '847', label: 'Active Deliveries', accent: 'bg-cyan-50' },
-  { icon: <Building2 size={22} className="text-amber-600" />, value: '156', label: 'NGOs Supported', accent: 'bg-amber-50' },
 ];
 
 const AGENT_METRICS = [
@@ -1966,7 +1955,7 @@ function NeedsPanel({ session, needs }: { session: Session; needs: NeedRecord[] 
   const [categoryFilter, setCategoryFilter] = useState<FoodCategory>('any');
 
   const visibleNeeds = needs
-    .filter((need) => isNeedCompatible(need, mealTypeFilter, categoryFilter))
+    .filter((need) => need.status === 'open' && isNeedCompatible(need, mealTypeFilter, categoryFilter))
     .slice()
     .sort((left, right) => {
       const urgencyDelta = getUrgencyScore(left.urgency) - getUrgencyScore(right.urgency);
@@ -2051,19 +2040,32 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
     setIsDetectingLocation(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        console.log('[LAYA] Detected NGO location:', position.coords);
         setForm((current) => ({
           ...current,
           lat: position.coords.latitude.toFixed(6),
           lng: position.coords.longitude.toFixed(6),
-          address: current.address || `Selected from map (${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)})`,
+          address:
+            current.address ||
+            `Selected from map (${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)})`,
         }));
         setNotice('Need location detected successfully.');
         setIsDetectingLocation(false);
       },
-      () => {
-        setNotice('Unable to detect location. Please enter coordinates manually.');
+      (error) => {
+        console.error('[LAYA] Geolocation error:', error);
+        if (error.code === error.PERMISSION_DENIED) {
+          setNotice('Location permission denied. Please allow location access in your browser.');
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          setNotice('Unable to determine your position. Please try again or enter coordinates manually.');
+        } else if (error.code === error.TIMEOUT) {
+          setNotice('Location request timed out. Please try again.');
+        } else {
+          setNotice('Unable to detect location. Please enter coordinates manually.');
+        }
         setIsDetectingLocation(false);
-      }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
     );
   };
 
@@ -2090,8 +2092,9 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
     }
 
     try {
-      await createNeed({
-        ngoId: session.email,
+      const currentUserId = session.uid || session.email;
+      const newNeedData = {
+        ngoId: currentUserId,
         ngoName: session.name,
         location: { lat: latitude, lng: longitude, address: form.address },
         peopleCount: Number(form.peopleCount),
@@ -2100,7 +2103,10 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
         category: form.category,
         urgency: form.urgency,
         requiredBefore,
-      });
+      };
+
+      console.log('[LAYA] Creating need for NGO:', currentUserId, newNeedData);
+      await createNeed(newNeedData);
 
       setForm({ address: '', lat: '', lng: '', peopleCount: '', foodType: '', mealType: 'any', category: 'any', urgency: 'high', requiredBefore: '' });
       setNotice('✅ Request created successfully.');
@@ -2109,8 +2115,9 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
     }
   };
 
-  const myNeeds = needs.filter((need) => need.ngoId === session.email);
-  const activeNeeds = myNeeds.filter((need) => need.status !== 'fulfilled');
+  const currentUserId = session.uid || session.email;
+  const myNeeds = needs.filter((need) => need.ngoId === currentUserId);
+  const activeNeeds = myNeeds.filter((need) => need.status === 'open' || need.status === 'assigned');
   const ngoNeedIds = new Set(myNeeds.map((need) => need.id));
   const incomingDeliveries = deliveries.filter((delivery) => ngoNeedIds.has(delivery.needId) && delivery.status !== 'delivered');
 
@@ -2305,6 +2312,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
     setIsDetectingLocation(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        console.log('[LAYA] Detected pickup location:', position.coords);
         setForm((current) => ({
           ...current,
           pickupLat: position.coords.latitude.toFixed(6),
@@ -2314,10 +2322,20 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
         setNotice('Pickup location detected successfully.');
         setIsDetectingLocation(false);
       },
-      () => {
-        setNotice('Unable to detect your location. Please enter it manually.');
+      (error) => {
+        console.error('[LAYA] Geolocation error:', error);
+        if (error.code === error.PERMISSION_DENIED) {
+          setNotice('Location permission denied. Please allow location access in your browser.');
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          setNotice('Unable to determine your position. Please try again or enter it manually.');
+        } else if (error.code === error.TIMEOUT) {
+          setNotice('Location request timed out. Please try again.');
+        } else {
+          setNotice('Unable to detect your location. Please enter it manually.');
+        }
         setIsDetectingLocation(false);
-      }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
     );
   };
 
@@ -3495,21 +3513,25 @@ function App() {
       }
 
       try {
-        console.log("User:", user);
+        console.log('[LAYA] Auth state changed. User UID:', user.uid, 'Email:', user.email);
         const profile = await fbGetUserProfile(user.uid);
-        console.log("Fetched profile:", profile);
+        console.log('[LAYA] Firestore profile fetched:', profile);
+        
         const pendingGoogleAuth = typeof window !== 'undefined' ? window.localStorage.getItem(GOOGLE_AUTH_PENDING_KEY) : null;
         const pendingAuth = pendingGoogleAuth ? (JSON.parse(pendingGoogleAuth) as { role?: Role; uiRole?: UiRole; displayRoleLabel?: string } | null) : null;
+        console.log('[LAYA] Pending Google auth:', pendingAuth);
+        
         const storedSession = typeof window !== 'undefined' ? window.localStorage.getItem(SESSION_KEY) : null;
         const fallbackSession = storedSession ? (JSON.parse(storedSession) as Session) : null;
         const cachedSession = fallbackSession && fallbackSession.uid === user.uid ? fallbackSession : null;
+        console.log('[LAYA] Cached session:', cachedSession);
 
         const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
         const role = (profile?.role as Role) || pendingAuth?.role || cachedSession?.role;
         const uiRole = (profile?.uiRole as UiRole) || pendingAuth?.uiRole || cachedSession?.uiRole;
         const displayRoleLabel = profile?.displayRoleLabel || pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel || (uiRole ? formatUiRole(uiRole) : undefined);
 
-        console.log("Role:", role, "uiRole:", uiRole, "displayRoleLabel:", displayRoleLabel);
+        console.log('[LAYA] Resolved role:', role, 'uiRole:', uiRole, 'displayRoleLabel:', displayRoleLabel);
 
         if (!role || !uiRole) {
           console.error("User role not found for authenticated user", { profile, pendingAuth, cachedSession });
@@ -3529,7 +3551,7 @@ function App() {
           });
         }
 
-        console.log("Setting session with uiRole:", uiRole);
+        console.log('[LAYA] Setting session with:', { uid: user.uid, name, email: user.email, role, uiRole, displayRoleLabel });
         setSession({ uid: user.uid, name, email: user.email || '', role, uiRole, displayRoleLabel });
         setPage('app');
         setDashboardView('overview');
@@ -3720,6 +3742,7 @@ function App() {
 
         // signin
         const user = await fbSignInWithEmail(email, authForm.password);
+        console.log('[LAYA] User signed in:', user.uid, 'with uiRole:', selectedUiRole, 'and authRole:', authRole);
         await fbSetUserProfile(user.uid, {
           displayRoleLabel: formatUiRole(selectedUiRole),
           uiRole: selectedUiRole,
@@ -3727,6 +3750,7 @@ function App() {
           name: name || email.split('@')[0],
         });
         const profile = await fbGetUserProfile(user.uid);
+        console.log('[LAYA] Profile after update:', profile);
         setProfileCache(user.uid, {
           name: profile?.name || user.displayName || email.split('@')[0] || 'User',
           displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole),

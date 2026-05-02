@@ -26,6 +26,8 @@ import {
   where,
   getDocs,
   runTransaction,
+  serverTimestamp,
+  Timestamp,
   type Unsubscribe,
   type DocumentData,
 } from 'firebase/firestore';
@@ -443,7 +445,13 @@ export function listenToNeeds(callback: (needs: NeedRecord[]) => void) {
     remoteUnsub = onSnapshot(
       q,
       (snapshot) => {
-        const items = snapshot.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<NeedRecord, 'id'>) }));
+        const items = snapshot.docs.map((item) => {
+          const data = item.data() as Omit<NeedRecord, 'id'>;
+          const rawCreatedAt = data.createdAt as number | Timestamp | undefined | null;
+          const createdAt = rawCreatedAt instanceof Timestamp ? rawCreatedAt.toMillis() : Number(rawCreatedAt) || Date.now();
+          return { id: item.id, ...data, createdAt };
+        });
+        console.log('[LAYA] Fetched needs:', items);
         writeLocal(LOCAL_KEYS.needs, items);
         callback(items);
       },
@@ -1055,10 +1063,12 @@ export async function createNeed(input: Omit<NeedRecord, 'id' | 'status' | 'crea
     const docRef = await addDoc(collection(firestore, 'needs'), {
       ...input,
       status: 'open',
-      createdAt,
+      createdAt: serverTimestamp(),
     });
     const needs = readLocalNeeds().filter((item) => item.id !== docRef.id);
-    needs.unshift({ id: docRef.id, ...input, status: 'open', createdAt });
+    const newNeed = { id: docRef.id, ...input, status: 'open', createdAt };
+    console.log('[LAYA] Created need:', newNeed);
+    needs.unshift(newNeed);
     writeLocal(LOCAL_KEYS.needs, needs);
     emitNeeds();
     return docRef.id;
