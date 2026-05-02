@@ -292,26 +292,28 @@ function getInitialSession() {
   }
 }
 
+type ProfileCacheEntry = { name?: string; displayRoleLabel?: string; uiRole?: UiRole; role?: Role };
+
 function getProfileCache() {
   if (typeof window === 'undefined') {
-    return {} as Record<string, { name?: string; displayRoleLabel?: string; uiRole?: UiRole }>;
+    return {} as Record<string, ProfileCacheEntry>;
   }
 
   const raw = window.localStorage.getItem(PROFILE_CACHE_KEY);
 
   if (!raw) {
-    return {} as Record<string, { name?: string; displayRoleLabel?: string; uiRole?: UiRole }>;
+    return {} as Record<string, ProfileCacheEntry>;
   }
 
   try {
-    const parsed = JSON.parse(raw) as Record<string, { name?: string; displayRoleLabel?: string; uiRole?: UiRole }>;
+    const parsed = JSON.parse(raw) as Record<string, ProfileCacheEntry>;
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
-    return {} as Record<string, { name?: string; displayRoleLabel?: string; uiRole?: UiRole }>;
+    return {} as Record<string, ProfileCacheEntry>;
   }
 }
 
-function setProfileCache(uid: string, profile: { name?: string; displayRoleLabel?: string; uiRole?: UiRole }) {
+function setProfileCache(uid: string, profile: ProfileCacheEntry) {
   if (typeof window === 'undefined') {
     return;
   }
@@ -1237,7 +1239,7 @@ function AppShell({ session, dashboardView, setDashboardView, onLogout, needs, d
 
         <main className="mx-auto mt-8 max-w-7xl">
           {dashboard === 'overview' && <OverviewPanel session={session} needs={needs} donations={donations} deliveries={deliveries} setDashboardView={setDashboardView} />}
-          {dashboard === 'requests' && <RequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />}
+          {dashboard === 'requests' && <RequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} setDashboardView={setDashboardView} />}
           {dashboard === 'needs' && session.uiRole !== 'volunteer' && <NeedsPanel session={session} needs={needs} />}
           {dashboard === 'tracking' && (session.uiRole === 'volunteer' ? <VolunteerActiveDeliveryPanel session={session} deliveries={deliveries} /> : <TrackingPanel session={session} donations={donations} deliveries={deliveries} />)}
           {dashboard === 'history' && session.uiRole === 'volunteer' ? <VolunteerHistoryPanel session={session} deliveries={deliveries} /> : null}
@@ -1943,9 +1945,9 @@ function AgentOverview({ session, deliveries }: { session: Session; deliveries: 
   );
 }
 
-function RequestsPanel({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
+function RequestsPanel({ session, needs, donations, deliveries, setDashboardView }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[]; setDashboardView: (view: DashboardView) => void }) {
   return session.uiRole === 'donor'
-    ? <CustomerRequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} />
+    ? <CustomerRequestsPanel session={session} needs={needs} donations={donations} deliveries={deliveries} setDashboardView={setDashboardView} />
     : session.uiRole === 'ngo'
       ? <NgoRequestsPanel session={session} needs={needs} deliveries={deliveries} />
       : <AgentRequestsPanel session={session} needs={needs} deliveries={deliveries} />;
@@ -2281,7 +2283,7 @@ function NgoRequestsPanel({ session, needs, deliveries }: { session: Session; ne
   );
 }
 
-function CustomerRequestsPanel({ session, needs, donations, deliveries }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[] }) {
+function CustomerRequestsPanel({ session, needs, donations, deliveries, setDashboardView }: { session: Session; needs: NeedRecord[]; donations: DonationRecord[]; deliveries: DeliveryRecord[]; setDashboardView: (view: DashboardView) => void }) {
   const [form, setForm] = useState<DonationFormState>({
     foodType: '',
     mealType: 'any',
@@ -2294,6 +2296,7 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
     notificationEnabled: true,
     notes: '',
   });
+  const [aiUrgency, setAiUrgency] = useState<'HIGH' | 'MEDIUM' | 'LOW' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isDetectingLocation, setIsDetectingLocation] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -2401,7 +2404,6 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
     const pickupCoordinates = donorCoordinates;
 
     try {
-      // Always create donation (pending)
       const donationId = await createDonationRecord({
         donorId: session.email,
         foodType: form.foodType,
@@ -2418,41 +2420,16 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
         assignedNeedId: '',
       });
 
-      // Try an immediate match locally for quicker UX
-      const selectedNeed = selectBestNeedByScore(needs.filter((need) => need.status === 'open'), pickupCoordinates, form.mealType, form.category, expiryTimeStamp);
+      pendingAutoNavigationDonationIdRef.current = donationId;
 
-      if (selectedNeed) {
-        // mark donation assigned
-        await updateDonation(donationId, { status: 'assigned', assignedNeedId: selectedNeed.id });
-
-        await createDelivery({
-          donorId: session.email,
-          donorName: session.name,
-          ngoId: selectedNeed.ngoId,
-          agentId: null,
-          donationId,
-          pickupLocation: {
-            address: form.pickupLocation,
-            lat: pickupCoordinates?.lat ?? 0,
-            lng: pickupCoordinates?.lng ?? 0,
-          },
-          dropLocation: selectedNeed.location,
-          needId: selectedNeed.id,
-          agentLocation: null,
-          foodType: form.foodType,
-          mealType: form.mealType,
-          category: form.category,
-          quantity: form.quantity,
-          status: 'pending',
-        });
-
-        await updateNeed(selectedNeed.id, { status: 'assigned' });
-        setNotice(`✅ Matched to ${selectedNeed.location.address}`);
+      if (needs.filter((need) => need.status === 'open').length === 0) {
+        setNotice('No matching needs available');
       } else {
-        setNotice('⏳ No matching need yet. We\'ll notify you when a request appears.');
+        setNotice('✅ Donation submitted. Matching and agent assignment are running automatically.');
       }
 
       setForm({ foodType: '', mealType: 'any', category: 'any', quantity: '', pickupLocation: '', pickupLat: '', pickupLng: '', expiryTime: 'within-2-hours', notificationEnabled: true, notes: '' });
+      setAiUrgency(null);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to create donation.');
     }
@@ -2467,15 +2444,34 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
     }
   };
 
-  const handleAutoFill = async () => {
-    if (form.foodType.trim() && form.quantity.trim()) {
-      const event = new Event('submit', { bubbles: true, cancelable: true });
-      const formElement = document.querySelector('form[data-donation-form]') as HTMLFormElement;
-      if (formElement) {
-        formElement.dispatchEvent(event);
-      }
-    }
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const pendingAutoNavigationDonationIdRef = useRef<string | null>(null);
+
+  const handleAutoFill = () => {
+    formRef.current?.requestSubmit();
   };
+
+  useEffect(() => {
+    const pendingDonationId = pendingAutoNavigationDonationIdRef.current;
+
+    if (!pendingDonationId || session.uiRole !== 'donor') {
+      return;
+    }
+
+    const matchedDonation = donations.find((donation) => donation.id === pendingDonationId);
+    if (!matchedDonation || matchedDonation.status !== 'assigned') {
+      return;
+    }
+
+    const linkedDelivery = deliveries.find((delivery) => delivery.donationId === pendingDonationId);
+    if (!linkedDelivery) {
+      return;
+    }
+
+    pendingAutoNavigationDonationIdRef.current = null;
+    setDashboardView('tracking');
+    setNotice('✅ Donation matched and delivery tracking is ready.');
+  }, [deliveries, donations, session.uiRole, setDashboardView, setNotice]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -2485,9 +2481,9 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
             <p className="text-xs font-bold uppercase tracking-widest text-[#5D8FCB] mb-1">Donate Food</p>
             <h2 className="text-2xl font-black text-slate-800">Match surplus before it expires</h2>
           </div>
-          <AIAssist setFood={setFood} setQuantity={setQuantity} setLocation={setLocation} setExpiry={setExpiry} onAutoFill={handleAutoFill} />
+          <AIAssist setFood={setFood} setQuantity={setQuantity} setLocation={setLocation} setExpiry={setExpiry} onAutoFill={handleAutoFill} onUrgencyDetected={setAiUrgency} />
         </div>
-        <form onSubmit={submitDonation} data-donation-form className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
+        <form ref={formRef} onSubmit={submitDonation} data-donation-form className="mt-6 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
           <SimpleInput label="Food Type" value={form.foodType} onChange={(value) => setForm({ ...form, foodType: value })} placeholder="Prepared meals, bread, groceries" />
           <label className="block">
             <span className="mb-2 block text-sm font-semibold text-slate-800">Meal Type</span>
@@ -2652,13 +2648,26 @@ function CustomerRequestsPanel({ session, needs, donations, deliveries }: { sess
 function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; needs: NeedRecord[]; deliveries: DeliveryRecord[] }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [approvedDeliveries, setApprovedDeliveries] = useState<Record<string, boolean>>({});
+  const [optimisticallyAcceptedDeliveryIds, setOptimisticallyAcceptedDeliveryIds] = useState<string[]>([]);
   const currentUserId = session.uid || session.email;
   const needsById = needs.reduce<Record<string, NeedRecord>>((accumulator, need) => {
     accumulator[need.id] = need;
     return accumulator;
   }, {});
 
-  const visibleAssignments = deliveries
+  const effectiveDeliveries = deliveries.map((delivery) => {
+    if (optimisticallyAcceptedDeliveryIds.includes(delivery.id) && delivery.agentId !== currentUserId) {
+      return {
+        ...delivery,
+        agentId: currentUserId,
+        status: 'accepted' as DeliveryRecord['status'],
+      };
+    }
+
+    return delivery;
+  });
+
+  const visibleAssignments = effectiveDeliveries
     .filter((delivery) => delivery.status !== 'delivered' && (delivery.agentId == null || delivery.agentId === currentUserId || delivery.agentId === 'unassigned'))
     .sort((left, right) => {
       const order: Record<DeliveryStatus, number> = { pending: 0, accepted: 1, picked: 2, in_transit: 3, delivered: 4 };
@@ -2668,10 +2677,10 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
   const liveAssignmentIdsRef = useRef<string[]>([]);
 
   useEffect(() => {
-    liveAssignmentIdsRef.current = deliveries
+    liveAssignmentIdsRef.current = effectiveDeliveries
       .filter((delivery) => delivery.agentId === currentUserId && delivery.status !== 'delivered')
       .map((delivery) => delivery.id);
-  }, [deliveries, currentUserId]);
+  }, [effectiveDeliveries, currentUserId]);
 
   useEffect(() => {
     if (session.uiRole !== 'volunteer' || typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -2788,11 +2797,13 @@ function AgentRequestsPanel({ session, needs, deliveries }: { session: Session; 
                     <button
                       type="button"
                       onClick={async () => {
+                        setOptimisticallyAcceptedDeliveryIds((current) => (current.includes(delivery.id) ? current : [...current, delivery.id]));
                         try {
                           await acceptDeliveryAssignment(delivery.id, currentUserId);
                           openGoogleMapsRoute({ lat: delivery.pickupLocation.lat, lng: delivery.pickupLocation.lng });
                           setNotice('Delivery accepted and assigned to you.');
                         } catch (error) {
+                          setOptimisticallyAcceptedDeliveryIds((current) => current.filter((id) => id !== delivery.id));
                           setNotice(error instanceof Error ? error.message : 'Unable to accept delivery.');
                         }
                       }}
@@ -3488,6 +3499,7 @@ function App() {
   const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(EMPTY_DELIVERIES);
   const [isOffline, setIsOffline] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const logoutRequestedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -3510,11 +3522,15 @@ function App() {
     }
 
     if (session) {
+      logoutRequestedRef.current = false;
       window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       return;
     }
 
-    window.localStorage.removeItem(SESSION_KEY);
+    if (logoutRequestedRef.current) {
+      window.localStorage.removeItem(SESSION_KEY);
+      logoutRequestedRef.current = false;
+    }
   }, [session]);
 
   useEffect(() => {
@@ -3551,10 +3567,14 @@ function App() {
         const cachedSession = fallbackSession && fallbackSession.uid === user.uid ? fallbackSession : null;
         console.log('[LAYA] Cached session:', cachedSession);
 
+        const profileCache = getProfileCache();
+        const cachedProfile = profileCache[user.uid] || (user.email ? profileCache[user.email] || profileCache[user.email.toLowerCase()] : undefined);
+        console.log('[LAYA] Cached profile entry:', cachedProfile);
+
         const name = profile?.name || user.displayName || user.email?.split('@')[0] || 'User';
-        const role = (profile?.role as Role) || pendingAuth?.role || cachedSession?.role;
-        const uiRole = (profile?.uiRole as UiRole) || pendingAuth?.uiRole || cachedSession?.uiRole;
-        const displayRoleLabel = profile?.displayRoleLabel || pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel || (uiRole ? formatUiRole(uiRole) : undefined);
+        const role = (profile?.role as Role) || pendingAuth?.role || cachedSession?.role || cachedProfile?.role;
+        const uiRole = (profile?.uiRole as UiRole) || pendingAuth?.uiRole || cachedSession?.uiRole || cachedProfile?.uiRole;
+        const displayRoleLabel = profile?.displayRoleLabel || pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel || cachedProfile?.displayRoleLabel || (uiRole ? formatUiRole(uiRole) : undefined);
 
         console.log('[LAYA] Resolved role:', role, 'uiRole:', uiRole, 'displayRoleLabel:', displayRoleLabel);
 
@@ -3591,9 +3611,11 @@ function App() {
         const storedSession = typeof window !== 'undefined' ? window.localStorage.getItem(SESSION_KEY) : null;
         const fallbackSession = storedSession ? (JSON.parse(storedSession) as Session) : null;
         const cachedSession = fallbackSession && fallbackSession.uid === user.uid ? fallbackSession : null;
-        const role = pendingAuth?.role || cachedSession?.role;
-        const uiRole = pendingAuth?.uiRole || cachedSession?.uiRole;
-        const displayRoleLabel = pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel;
+        const profileCache = getProfileCache();
+        const cachedProfile = profileCache[user.uid] || (user.email ? profileCache[user.email] || profileCache[user.email.toLowerCase()] : undefined);
+        const role = pendingAuth?.role || cachedSession?.role || cachedProfile?.role;
+        const uiRole = pendingAuth?.uiRole || cachedSession?.uiRole || cachedProfile?.uiRole;
+        const displayRoleLabel = pendingAuth?.displayRoleLabel || cachedSession?.displayRoleLabel || cachedProfile?.displayRoleLabel;
 
         if (!role || !uiRole) {
           setSession(null);
@@ -3747,7 +3769,7 @@ function App() {
     if (useFirebase && isFirebaseConfigured()) {
       try {
         if (authMode === 'signup') {
-          await signUpWithEmail(
+          const profile = await signUpWithEmail(
             email,
             authForm.password,
             name || email.split('@')[0],
@@ -3757,7 +3779,15 @@ function App() {
             selectedUiRole === 'volunteer' ? authForm.vehicleNumber : undefined,
             selectedUiRole === 'volunteer' ? authForm.profileImageUrl : undefined
           );
-          setProfileCache(email, { name: name || email.split('@')[0], displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole });
+          setProfileCache(email, { name: name || email.split('@')[0], displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole, role: authRole });
+          setSession({
+            uid: profile.uid,
+            name: profile.name || name || email.split('@')[0] || 'User',
+            email: profile.email || email,
+            role: (profile.role as Role) || authRole,
+            uiRole: (profile.uiRole as UiRole) || selectedUiRole,
+            displayRoleLabel: profile.displayRoleLabel || formatUiRole(selectedUiRole),
+          });
           setAuthNotice('Account created successfully.');
           setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
           setPage('app');
@@ -3780,6 +3810,15 @@ function App() {
           name: profile?.name || user.displayName || email.split('@')[0] || 'User',
           displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole),
           uiRole: selectedUiRole,
+          role: authRole,
+        });
+        setSession({
+          uid: user.uid,
+          name: profile?.name || user.displayName || email.split('@')[0] || 'User',
+          email: user.email || email,
+          role: authRole,
+          uiRole: selectedUiRole,
+          displayRoleLabel: profile?.displayRoleLabel || formatUiRole(selectedUiRole),
         });
         setAuthNotice('Signed in successfully.');
         setAuthForm({ name: '', email: '', password: '', vehicleNumber: '', profileImageUrl: '' });
@@ -3809,7 +3848,7 @@ function App() {
       };
 
       setAccounts((current) => [...current, nextAccount]);
-      setProfileCache(nextAccount.email, { name: nextAccount.name, displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole });
+      setProfileCache(nextAccount.email, { name: nextAccount.name, displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole, role: nextAccount.role });
       setSession({ uid: nextAccount.email, name: nextAccount.name, email: nextAccount.email, role: nextAccount.role, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) });
       setPage('app');
       setDashboardView('overview');
@@ -3825,7 +3864,7 @@ function App() {
       return;
     }
 
-    setProfileCache(account.email, { name: account.name, displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole });
+    setProfileCache(account.email, { name: account.name, displayRoleLabel: formatUiRole(selectedUiRole), uiRole: selectedUiRole, role: account.role });
     setSession({ uid: account.email, name: account.name, email: account.email, role: account.role, uiRole: selectedUiRole, displayRoleLabel: formatUiRole(selectedUiRole) });
     setPage('app');
     setDashboardView('overview');
@@ -3844,6 +3883,7 @@ function App() {
       }
     }
 
+    logoutRequestedRef.current = true;
     setSession(null);
     setPage('landing');
     setDashboardView('overview');
@@ -4002,3 +4042,5 @@ function App() {
 }
 
 export default App;
+
+

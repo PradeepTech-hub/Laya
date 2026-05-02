@@ -42,6 +42,7 @@ type UserProfile = {
   uiRole?: string;
   vehicleNumber?: string;
   profileImageUrl?: string;
+  location?: NeedLocation | null;
   createdAt?: number;
 };
 
@@ -102,6 +103,7 @@ type DeliveryRecord = {
   agentName?: string;
   agentVehicleNumber?: string;
   agentProfileImageUrl?: string;
+  urgency?: 'HIGH' | 'MEDIUM' | 'LOW';
   createdAt: number;
 };
 
@@ -138,6 +140,10 @@ function getFirestoreDbOrThrow() {
   }
 
   return firestore;
+}
+
+function stripUndefinedFields<T extends Record<string, unknown>>(value: T) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
 }
 
 /**
@@ -205,7 +211,11 @@ const LOCAL_KEYS = {
   deliveries: 'laya.local.deliveries.v1',
 } as const;
 
+const LOCAL_SYNC_CHANNEL = 'laya.local-sync.v1';
+
 let forceLocalStore = !isConfigured();
+let localSyncChannel: BroadcastChannel | null = null;
+let localSyncListenersReady = false;
 
 const needsSubscribers = new Set<(items: NeedRecord[]) => void>();
 const donationsSubscribers = new Set<(items: DonationRecord[]) => void>();
@@ -242,6 +252,70 @@ function readLocal<T>(key: string): T[] {
 function writeLocal<T>(key: string, value: T[]) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(key, JSON.stringify(value));
+  emitLocalStoreSync(key);
+}
+
+function getLocalSyncChannel() {
+  if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') {
+    return null;
+  }
+
+  if (!localSyncChannel) {
+    localSyncChannel = new BroadcastChannel(LOCAL_SYNC_CHANNEL);
+  }
+
+  return localSyncChannel;
+}
+
+function emitLocalStoreSync(key: string) {
+  const channel = getLocalSyncChannel();
+  if (!channel) {
+    return;
+  }
+
+  channel.postMessage({ key });
+}
+
+function handleLocalStoreSync(key: string) {
+  if (key === LOCAL_KEYS.needs) {
+    emitNeeds();
+    return;
+  }
+
+  if (key === LOCAL_KEYS.donations) {
+    emitDonations();
+    return;
+  }
+
+  if (key === LOCAL_KEYS.deliveries) {
+    emitDeliveries();
+  }
+}
+
+function ensureLocalSyncListeners() {
+  if (typeof window === 'undefined' || localSyncListenersReady) {
+    return;
+  }
+
+  localSyncListenersReady = true;
+
+  window.addEventListener('storage', (event) => {
+    if (!event.key) {
+      return;
+    }
+
+    handleLocalStoreSync(event.key);
+  });
+
+  const channel = getLocalSyncChannel();
+  if (channel) {
+    channel.addEventListener('message', (event) => {
+      const key = typeof event.data?.key === 'string' ? event.data.key : null;
+      if (key) {
+        handleLocalStoreSync(key);
+      }
+    });
+  }
 }
 
 function readLocalNeeds() {
@@ -431,6 +505,8 @@ export async function signInWithGoogle(): Promise<void> {
 }
 
 export function listenToNeeds(callback: (needs: NeedRecord[]) => void) {
+  ensureLocalSyncListeners();
+
   if (!canUseRemoteFirestore()) {
     return subscribeNeedsLocal(callback);
   }
@@ -481,6 +557,8 @@ export function listenToNeeds(callback: (needs: NeedRecord[]) => void) {
 }
 
 export function listenToDeliveries(callback: (deliveries: DeliveryRecord[]) => void) {
+  ensureLocalSyncListeners();
+
   if (!canUseRemoteFirestore()) {
     return subscribeDeliveriesLocal(callback);
   }
@@ -525,6 +603,8 @@ export function listenToDeliveries(callback: (deliveries: DeliveryRecord[]) => v
 }
 
 export function listenToDonations(callback: (donations: DonationRecord[]) => void) {
+  ensureLocalSyncListeners();
+
   if (!canUseRemoteFirestore()) {
     return subscribeDonationsLocal(callback);
   }
@@ -600,14 +680,8 @@ function getUrgencyWeightLocal(urgency: NeedRecord['urgency']) {
   return urgency === 'high' ? 300 : urgency === 'medium' ? 180 : 90;
 }
 
-function getDistanceScoreLocal(distanceKm: number) {
-  if (!Number.isFinite(distanceKm)) return 0;
-  return Math.max(0, 100 - distanceKm * 5);
-}
-
-function getTimeUrgencyScoreLocal(requiredBefore: number) {
-  const hoursUntil = Math.max((requiredBefore - Date.now()) / (1000 * 60 * 60), 0);
-  return Math.max(0, 100 - hoursUntil * 10);
+function getTimeToExpiryHours(expiryTime: number) {
+  return Math.max((expiryTime - Date.now()) / (1000 * 60 * 60), 0.01);
 }
 
 function canDeliverBeforeExpiry(expiryTime: number, durationMin: number) {
@@ -625,6 +699,119 @@ function isNeedCompatibleLocal(need: NeedRecord, donation: DonationRecord) {
   return mealOk && catOk;
 }
 
+type AvailableAgent = {
+  id: string;
+  name: string;
+  vehicleNumber?: string;
+  profileImageUrl?: string | null;
+  location?: NeedLocation | null;
+  activeDeliveries: number;
+  distanceKm: number | null;
+};
+
+function getDistanceToPickup(agent: AvailableAgent, pickupLocation: NeedLocation | null) {
+  if (!pickupLocation || !agent.location) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return calculateDistanceKmSimple(
+    { lat: agent.location.lat, lng: agent.location.lng },
+    { lat: pickupLocation.lat, lng: pickupLocation.lng }
+  );
+}
+
+export async function getAvailableAgents(): Promise<AvailableAgent[]> {
+  if (!canUseRemoteFirestore()) {
+    return [];
+  }
+
+  try {
+    const firestore = getFirestoreDbOrThrow();
+    const agentsSnap = await getDocs(query(collection(firestore, 'users'), where('uiRole', '==', 'volunteer')));
+    const agentProfiles = agentsSnap.docs.map((item) => ({ id: item.id, ...(item.data() as Omit<UserProfile, 'uid'>) }));
+
+    const activeDeliveriesSnap = await getDocs(
+      query(collection(firestore, 'deliveries'), where('status', 'in', ['pending', 'accepted', 'picked', 'in_transit']))
+    );
+
+    const activeDeliveryCount = new Map<string, number>();
+    activeDeliveriesSnap.docs.forEach((item) => {
+      const data = item.data() as Omit<DeliveryRecord, 'id'>;
+      if (data.agentId) {
+        activeDeliveryCount.set(data.agentId, (activeDeliveryCount.get(data.agentId) || 0) + 1);
+      }
+    });
+
+    return agentProfiles
+      .map((profile) => ({
+        id: profile.id,
+        name: profile.name || 'Delivery Agent',
+        vehicleNumber: profile.vehicleNumber,
+        profileImageUrl: profile.profileImageUrl ?? null,
+        location: profile.location ?? null,
+        activeDeliveries: activeDeliveryCount.get(profile.id) || 0,
+        distanceKm: null,
+      }))
+      .filter((agent) => agent.activeDeliveries === 0);
+  } catch (error) {
+    if (isFirestoreMissingError(error)) {
+      switchToLocalStore();
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function getBestAvailableAgent(pickupLocation: NeedLocation | null) {
+  const agents = await getAvailableAgents();
+
+  if (!agents.length) {
+    return null;
+  }
+
+  const scored = agents
+    .map((agent) => {
+      const distanceKm = getDistanceToPickup(agent, pickupLocation);
+      return {
+        agent,
+        distanceKm,
+        score: Number.isFinite(distanceKm) ? 1 / Math.max(distanceKm, 0.001) : 0,
+      };
+    })
+    .filter((entry) => Number.isFinite(entry.distanceKm))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      if (left.distanceKm !== right.distanceKm) {
+        return left.distanceKm - right.distanceKm;
+      }
+
+      return left.agent.name.localeCompare(right.agent.name);
+    });
+
+    return scored[0]?.agent ?? null;
+}
+
+async function assignBestAvailableAgentToDelivery(deliveryId: string, pickupLocation: NeedLocation | null) {
+  const bestAgent = await getBestAvailableAgent(pickupLocation);
+
+  if (!bestAgent) {
+    return null;
+  }
+
+  await updateDelivery(deliveryId, {
+    agentId: bestAgent.id,
+    agentName: bestAgent.name,
+    agentVehicleNumber: bestAgent.vehicleNumber,
+    agentProfileImageUrl: bestAgent.profileImageUrl ?? undefined,
+    status: 'pending',
+  });
+
+  return bestAgent;
+}
+
 function pickBestNeedForDonation(donation: DonationRecord, needs: NeedRecord[]) {
   if (!needs.length) return null;
 
@@ -639,11 +826,11 @@ function pickBestNeedForDonation(donation: DonationRecord, needs: NeedRecord[]) 
 
   const scored = valid.map((need) => {
     const dist = calculateDistanceKmSimple(donorLoc, { lat: need.location.lat, lng: need.location.lng });
-    const score = getUrgencyWeightLocal(need.urgency) + getDistanceScoreLocal(dist) + getTimeUrgencyScoreLocal(need.requiredBefore);
+    const score = getUrgencyWeightLocal(need.urgency) + (1 / Math.max(dist, 0.001)) + (1 / getTimeToExpiryHours(donation.expiryTime));
     return { need, score };
   });
 
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || a.need.requiredBefore - b.need.requiredBefore);
   return scored[0].need;
 }
 
@@ -658,11 +845,9 @@ async function scoreNeedForDonation(donation: DonationRecord, need: NeedRecord) 
 
   if (!canDeliverBeforeExpiry(donation.expiryTime, route.durationMin)) return null;
 
-  const timeToExpiryMin = Math.max((donation.expiryTime - Date.now()) / (1000 * 60), 1);
   const score = getUrgencyWeightLocal(need.urgency)
     + (1 / Math.max(route.distanceKm, 0.001))
-    + (1 / timeToExpiryMin)
-    - (route.durationMin / 60);
+    + (1 / getTimeToExpiryHours(donation.expiryTime));
 
   return { need, score };
 }
@@ -676,11 +861,9 @@ async function scoreDonationForNeed(need: NeedRecord, donation: DonationRecord) 
 
   if (!canDeliverBeforeExpiry(donation.expiryTime, route.durationMin)) return null;
 
-  const timeToExpiryMin = Math.max((donation.expiryTime - Date.now()) / (1000 * 60), 1);
   const score = getUrgencyWeightLocal(need.urgency)
     + (1 / Math.max(route.distanceKm, 0.001))
-    + (1 / timeToExpiryMin)
-    - (route.durationMin / 60);
+    + (1 / getTimeToExpiryHours(donation.expiryTime));
 
   return { donation, score };
 }
@@ -695,7 +878,7 @@ async function pickBestNeedForDonationAsync(donation: DonationRecord, needs: Nee
   }
 
   if (!scored.length) return null;
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || a.need.requiredBefore - b.need.requiredBefore);
   return scored[0].need;
 }
 
@@ -709,7 +892,7 @@ async function pickBestDonationForNeedAsync(need: NeedRecord, donations: Donatio
   }
 
   if (!scored.length) return null;
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || a.need.requiredBefore - b.need.requiredBefore);
   return scored[0].donation;
 }
 
@@ -725,12 +908,12 @@ function pickBestDonationForNeed(need: NeedRecord, donations: DonationRecord[]) 
     })
     .map((donation) => {
       const dist = calculateDistanceKmSimple({ lat: donation.location.lat, lng: donation.location.lng }, { lat: need.location.lat, lng: need.location.lng });
-      const score = getUrgencyWeightLocal(need.urgency) + getDistanceScoreLocal(dist) + getTimeUrgencyScoreLocal(need.requiredBefore);
+      const score = getUrgencyWeightLocal(need.urgency) + (1 / Math.max(dist, 0.001)) + (1 / getTimeToExpiryHours(donation.expiryTime));
       return { donation, score };
     });
 
   if (!scored.length) return null;
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || a.donation.expiryTime - b.donation.expiryTime);
   return scored[0].donation;
 }
 
@@ -958,6 +1141,8 @@ async function assignMatchTransaction(donationId: string, needId: string) {
         createdAt: Date.now(),
       } as DocumentData);
     });
+
+    await assignBestAvailableAgentToDelivery(deliveryRef.id, donation.location);
   } catch (error) {
     // transaction failed; log and let engine retry
     console.warn('[LAYA] assignMatchTransaction failed:', error);
@@ -1194,7 +1379,7 @@ export async function updateDonation(id: string, patch: Partial<Omit<DonationRec
 
   try {
     const firestore = getFirestoreDbOrThrow();
-    await updateDoc(doc(firestore, 'donations', id), patch as DocumentData);
+    await updateDoc(doc(firestore, 'donations', id), stripUndefinedFields(patch) as DocumentData);
     updateLocal();
   } catch (error) {
     console.warn('[LAYA] Firestore updateDonation failed, falling back to local:', error);
@@ -1222,7 +1407,7 @@ export async function updateDelivery(id: string, patch: Partial<Omit<DeliveryRec
 
   try {
     const firestore = getFirestoreDbOrThrow();
-    await updateDoc(doc(firestore, 'deliveries', id), patch as DocumentData);
+    await updateDoc(doc(firestore, 'deliveries', id), stripUndefinedFields(patch) as DocumentData);
     updateLocal();
   } catch (error) {
     if (isFirestoreMissingError(error)) {
@@ -1290,13 +1475,13 @@ export async function acceptDeliveryAssignment(id: string, agentId: string) {
         throw new Error('Delivery is no longer available');
       }
 
-      tx.update(deliveryRef, {
+      tx.update(deliveryRef, stripUndefinedFields({
         agentId,
         agentName: agentInfo.name,
         agentVehicleNumber: agentInfo.vehicleNumber,
         agentProfileImageUrl: agentInfo.profileImageUrl,
         status: 'accepted',
-      } as DocumentData);
+      }) as DocumentData);
     });
 
     return acceptLocal(agentInfo);

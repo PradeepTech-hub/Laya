@@ -20,6 +20,7 @@ type AIAssistProps = {
   setLocation: (value: string) => void;
   setExpiry: (value: string) => void;
   onAutoFill?: () => void;
+  onUrgencyDetected?: (urgency: 'HIGH' | 'MEDIUM' | 'LOW') => void;
 };
 
 const REQUIRED_JSON_KEYS: Array<keyof ParsedDonation> = [
@@ -60,6 +61,38 @@ function toExpiryOption(value: string): 'within-1-hour' | 'within-2-hours' | 'wi
   return 'today';
 }
 
+
+function parseDonationFromText(input: string, detectedLocation: string): ParsedDonation {
+  const text = input.toLowerCase();
+
+  // quantity
+  const quantityMatch = text.match(/\d+/);
+  const quantity = quantityMatch ? quantityMatch[0] : '1';
+
+  // food
+  const foodMatch = text.match(/(rice|meals|food|snacks)/);
+  const food_item = foodMatch ? foodMatch[0] : 'Food donation';
+
+  // location (clean extraction)
+  const locationMatch = text.match(/in ([a-zA-Z\s]+)/);
+  let location = locationMatch ? locationMatch[1] : detectedLocation || 'Auto-detected';
+
+  // REMOVE extra words like "expires..."
+  location = location.replace(/expires.*$/, '').trim();
+
+  // expiry hours
+  const expiryMatch = text.match(/(\d+)\s*(hour|hours)/);
+  const expiryHours = expiryMatch ? parseInt(expiryMatch[1]) : 24;
+  const expiry_time = expiryHours <= 2 ? 'within-1-hour' : expiryHours <= 4 ? 'within-2-hours' : 'within-4-hours';
+
+  // urgency
+  let urgency_hint: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+  if (expiryHours <= 2) urgency_hint = 'HIGH';
+  else if (expiryHours <= 6) urgency_hint = 'MEDIUM';
+
+  return { food_item, quantity, location, expiry_time, urgency_hint };
+}
+
 function extractJson(text: string): ParsedDonation {
   const codeBlockMatch = text.match(/```json\s*([\s\S]*?)\s*```/i) || text.match(/```\s*([\s\S]*?)\s*```/i);
   const candidate = codeBlockMatch ? codeBlockMatch[1] : text;
@@ -85,15 +118,15 @@ function extractJson(text: string): ParsedDonation {
   }
 
   return {
-    food_item: record.food_item.trim(),
-    quantity: record.quantity.trim(),
-    location: record.location.trim(),
-    expiry_time: record.expiry_time.trim(),
-    urgency_hint: record.urgency_hint.trim(),
+    food_item: (record.food_item as string).trim(),
+    quantity: (record.quantity as string).trim(),
+    location: (record.location as string).trim(),
+    expiry_time: (record.expiry_time as string).trim(),
+    urgency_hint: (record.urgency_hint as string).trim(),
   };
 }
 
-export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry, onAutoFill }: AIAssistProps) {
+export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry, onAutoFill, onUrgencyDetected }: AIAssistProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -105,7 +138,6 @@ export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry,
 
   const detectLocation = () => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      setError('Location detection not supported');
       return;
     }
 
@@ -114,9 +146,8 @@ export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry,
         const { latitude, longitude } = position.coords;
         setDetectedLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
       },
-      (err) => {
-        console.error('Geolocation error:', err);
-        setError('Could not detect location. Please enter manually.');
+      () => {
+        setDetectedLocation('');
       }
     );
   };
@@ -137,9 +168,7 @@ export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry,
     }
 
     const userPrompt = input.trim();
-    const nextUserMsg: ChatMessage = { role: 'user', content: userPrompt };
-
-    setMessages((prev) => [...prev, nextUserMsg]);
+    setMessages((prev) => [...prev, { role: 'user', content: userPrompt }]);
     setInput('');
     setIsLoading(true);
     setError(null);
@@ -150,61 +179,100 @@ export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry,
           {
             parts: [
               {
-                text: `${SYSTEM_PROMPT}\n\nUser input: ${userPrompt}`,
+                text: `${SYSTEM_PROMPT}
+
+User input: ${userPrompt}`,
               },
             ],
           },
         ],
         generationConfig: {
-          temperature: 0.7,
+          temperature: 0.2,
           maxOutputTokens: 1024,
         },
       };
 
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
         }
       );
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        console.error('Gemini API error response:', errData);
-        throw new Error(`Gemini API error (${response.status}): ${JSON.stringify(errData)}`);
+      if (response.ok) {
+        const data = (await response.json()) as {
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        };
+
+        const modelText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!modelText) {
+          throw new Error('No AI response received from Gemini.');
+        }
+
+        const structured = extractJson(modelText);
+        const resolvedQuantity = structured.quantity.trim() || '1';
+        const resolvedLocation = structured.location.trim() || detectedLocation || 'Auto-detected';
+        const resolvedExpiry = toExpiryOption(structured.expiry_time || structured.urgency_hint);
+        const resolvedFood = structured.food_item.trim() || userPrompt;
+
+        setFood(resolvedFood);
+        setQuantity(resolvedQuantity);
+        setLocation(resolvedLocation);
+        setExpiry(resolvedExpiry);
+        onUrgencyDetected?.(structured.urgency_hint as 'HIGH' | 'MEDIUM' | 'LOW');
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: `✅ Parsed:
+Food: ${resolvedFood}
+Qty: ${resolvedQuantity}
+Location: ${resolvedLocation}
+Expiry: ${resolvedExpiry}`,
+          },
+        ]);
+
+        if (onAutoFill) {
+          setTimeout(() => onAutoFill(), 400);
+        }
+
+        return;
       }
 
-      const data = (await response.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
+      const errorText = await response.text();
+      const isQuotaOrUnavailable = response.status === 429 || /quota|rate limit|resource_exhausted|not found|unsupported/i.test(errorText);
+      if (isQuotaOrUnavailable) {
+        const fallback = parseDonationFromText(userPrompt, detectedLocation);
+        setFood(fallback.food_item);
+        setQuantity(fallback.quantity);
+        setLocation(fallback.location);
+        setExpiry(fallback.expiry_time);
+        onUrgencyDetected?.(fallback.urgency_hint as 'HIGH' | 'MEDIUM' | 'LOW');
 
-      const modelText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!modelText) {
-        throw new Error('No AI response received from Gemini.');
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: `✅ Parsed locally due to Gemini quota limit:
+Food: ${fallback.food_item}
+Qty: ${fallback.quantity}
+Location: ${fallback.location}
+Expiry: ${fallback.expiry_time}
+Urgency: ${fallback.urgency_hint}`,
+          },
+        ]);
+
+        if (onAutoFill) {
+          setTimeout(() => onAutoFill(), 400);
+        }
+
+        return;
       }
 
-      const structured = extractJson(modelText);
-
-      setFood(structured.food_item);
-      setQuantity(structured.quantity || '1');
-      setLocation(structured.location || detectedLocation);
-      setExpiry(toExpiryOption(structured.expiry_time || structured.urgency_hint));
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `✅ Parsed:\nFood: ${structured.food_item}\nQty: ${structured.quantity}\nLocation: ${structured.location}\nExpiry: ${structured.urgency_hint}`,
-        },
-      ]);
-
-      if (onAutoFill) {
-        setTimeout(() => onAutoFill(), 500);
-      }
+      throw new Error(`Gemini API error (${response.status}): ${errorText}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to parse your message right now.';
       setError(message);
@@ -247,22 +315,20 @@ export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry,
             </div>
 
             <div className="h-72 space-y-3 overflow-y-auto px-4 py-3">
-              {detectedLocation && (
+              {detectedLocation ? (
                 <p className="rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
                   📍 Location auto-detected: {detectedLocation}
                 </p>
-              )}
-
-              {messages.length === 0 && !detectedLocation ? (
+              ) : (
                 <p className="rounded-2xl bg-blue-50 px-3 py-2 text-sm text-blue-700 flex items-center gap-2">
                   <Loader size={14} className="animate-spin" />
                   Detecting your location...
                 </p>
-              ) : null}
+              )}
 
-              {messages.length === 0 && detectedLocation ? (
+              {messages.length === 0 ? (
                 <p className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                  Describe your donation briefly. Example: "50 veg meals" or "100 packed snacks expires in 2 hours"
+                  Describe your donation naturally. Example: "50 veg meals in Koramangala expires in 2 hours".
                 </p>
               ) : null}
 
@@ -293,7 +359,12 @@ export default function AIAssist({ setFood, setQuantity, setLocation, setExpiry,
                 <input
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && canSend && sendMessage()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && canSend) {
+                      event.preventDefault();
+                      void sendMessage();
+                    }
+                  }}
                   placeholder="e.g., 50 veg meals or non-veg..."
                   className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-[#7FAFE0] focus:ring-4 focus:ring-[#7FAFE0]/20"
                 />
