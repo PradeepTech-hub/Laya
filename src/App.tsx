@@ -779,7 +779,12 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
       setNotice(null);
       await onGoogleSignIn(uiRole);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Google sign-in failed');
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: string }).code || '')
+        : '';
+      setNotice(code === 'auth/operation-not-allowed'
+        ? 'Google sign-in is disabled in Firebase. Enable Google under Authentication > Sign-in method.'
+        : error instanceof Error ? error.message : 'Google sign-in failed');
     } finally {
       setIsGoogleLoading(false);
     }
