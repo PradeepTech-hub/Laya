@@ -496,7 +496,14 @@ export async function signInWithGoogle(): Promise<void> {
     await signInWithPopup(auth!, provider);
   } catch (error) {
     console.warn('[LAYA] signInWithPopup failed, falling back to redirect:', error);
-    await signInWithRedirect(auth!, provider);
+    const code = typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: string }).code || '')
+      : '';
+    if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+      await signInWithRedirect(auth!, provider);
+      return;
+    }
+    throw error;
   }
 }
 

@@ -3662,60 +3662,10 @@ function App() {
 
   // Migrate local demo accounts into Firebase Auth + Firestore users collection.
   useEffect(() => {
-    const useFirebase = Boolean(import.meta.env.VITE_FIREBASE_API_KEY);
-
-    if (!useFirebase || !isFirebaseConfigured()) return;
-
-    const already = typeof window !== 'undefined' ? window.localStorage.getItem('laya.firebase.migrated.v1') : null;
-    if (already === '1' || migrationDone) return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const localAccounts = getInitialAccounts();
-
-        for (const acct of localAccounts) {
-          if (cancelled) return;
-
-          try {
-            // Try to sign in — if succeeds, ensure profile exists; then sign out
-            const user = await fbSignInWithEmail(acct.email, acct.password);
-            try {
-              const profile = await fbGetUserProfile(user.uid);
-              if (!profile) {
-                await signUpWithEmail(acct.email, acct.password, acct.name, acct.role);
-              }
-            } catch {
-              // ensure profile exists
-              await signUpWithEmail(acct.email, acct.password, acct.name, acct.role);
-            }
-
-            await fbSignOut();
-          } catch {
-            // sign-in failed -> create user & profile
-            try {
-              await signUpWithEmail(acct.email, acct.password, acct.name, acct.role);
-              await fbSignOut();
-            } catch {
-              // ignore individual account failures
-            }
-          }
-        }
-
-        if (!cancelled) {
-          if (typeof window !== 'undefined') window.localStorage.setItem('laya.firebase.migrated.v1', '1');
-          setMigrationDone(true);
-          setAuthNotice('Demo accounts migrated to Firebase.');
-        }
-      } catch {
-        // migration overall failed; do nothing
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    // Never sign in and out of shared Firebase Auth in the background. Doing so
+    // races with real email or Google authentication and can replace its session.
+    if (migrationDone) return;
+    setMigrationDone(true);
   }, [migrationDone]);
 
   useEffect(() => {
