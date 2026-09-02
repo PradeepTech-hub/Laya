@@ -129,13 +129,21 @@ type AuthPageProps = {
   role: Role;
   setMode: (mode: AuthMode) => void;
   setRole: (role: Role) => void;
-  form: { name: string; email: string; password: string };
-  setForm: (form: { name: string; email: string; password: string }) => void;
+  form: AuthForm;
+  setForm: (form: AuthForm) => void;
   notice: string | null;
   setNotice: (notice: string | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>, uiRole: UiRole) => void;
   onGoogleSignIn: (uiRole: UiRole) => Promise<void>;
   onBack: () => void;
+};
+
+type AuthForm = {
+  name: string;
+  email: string;
+  password: string;
+  vehicleNumber: string;
+  profileImageUrl: string;
 };
 
 type LandingPageProps = {
@@ -982,7 +990,10 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
                   )}
                   <input
                     type="email"
+                    id="auth-email"
+                    name="email"
                     required
+                    autoComplete="email"
                     placeholder="Email Address"
                     value={form.email}
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -990,8 +1001,11 @@ function AuthPage({ mode, role, setMode, setRole, form, setForm, notice, setNoti
                   />
                   <input
                     type="password"
+                    id="auth-password"
+                    name="password"
                     required
                     minLength={4}
+                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                     placeholder="Password"
                     value={form.password}
                     onChange={(e) => setForm({ ...form, password: e.target.value })}
@@ -3709,6 +3723,12 @@ function App() {
       setNeeds(EMPTY_NEEDS);
       setDonations(EMPTY_DONATIONS);
       setDeliveries(EMPTY_DELIVERIES);
+      setIsOffline(false);
+      return;
+    }
+
+    if (authLoading || !session?.uid) {
+      setIsOffline(false);
       return;
     }
 
@@ -3730,7 +3750,7 @@ function App() {
       unsubscribeDeliveries();
       stopEngine();
     };
-  }, []);
+  }, [authLoading, session?.uid]);
 
   const demoMode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('demo') === 'donor-dashboard' : false;
 

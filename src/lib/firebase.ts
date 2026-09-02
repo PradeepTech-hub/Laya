@@ -158,17 +158,13 @@ function isFirestoreUnavailableError(error: unknown): boolean {
   const message = typeof error === 'object' && 'message' in error ? String((error as { message?: string }).message || '') : '';
   const msg = `${code} ${message}`.toLowerCase();
   
-  // Broad detection: database missing, permission denied, network failures, connection refused
+  // Only transport failures should activate local mode. Configuration and rules
+  // errors must remain visible so remote Firestore is not silently bypassed.
   return (
-    msg.includes('database (default) does not exist') ||
-    msg.includes('not-found') ||
-    msg.includes('permission-denied') ||
-    msg.includes('unauthenticated') ||
     msg.includes('could not reach cloud firestore backend') ||
-    msg.includes('failed to get document from cache') ||
     msg.includes('network error') ||
+    msg.includes('network-request-failed') ||
     msg.includes('failed to connect') ||
-    code === 'failed-precondition' ||
     code === 'unavailable'
   );
 }
@@ -1359,9 +1355,7 @@ export async function createDonation(input: Omit<DonationRecord, 'id' | 'created
       switchToLocalStore();
       return createLocal();
     }
-    // For other errors, still fallback to local to ensure donation is created
-    switchToLocalStore();
-    return createLocal();
+    throw error;
   }
 }
 
