@@ -3562,7 +3562,7 @@ function App() {
       setAuthLoading(true);
       if (!user) {
         setSession(null);
-        setPage('landing');
+        setPage((currentPage) => (currentPage === 'auth' ? 'auth' : 'landing'));
         setAuthLoading(false);
         return;
       }
